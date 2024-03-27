@@ -6,6 +6,8 @@ from collections import defaultdict
 
 from anticipation.config import *
 from anticipation.vocab import *
+from anticipation.vocabs.tripletmidi import vocab
+
 
 #
 # TODO: need to rewrite this whole module to take a vocabulary parameter
@@ -15,18 +17,18 @@ from anticipation.vocab import *
 def print_tokens(tokens):
     print('---------------------')
     for j, (tm, dur, note) in enumerate(zip(tokens[0::3],tokens[1::3],tokens[2::3])):
-        if note == SEPARATOR:
+        if note == vocab['separator']:
             assert tm == SEPARATOR and dur == SEPARATOR
             print(j, 'SEPARATOR')
             continue
 
-        if note == REST:
+        if note == vocab['rest']:
             assert tm < CONTROL_OFFSET
             assert dur == DUR_OFFSET+0
             print(j, tm, 'REST')
             continue
 
-        if note < CONTROL_OFFSET:
+        if note < vocab['control_offset']:
             tm = tm - TIME_OFFSET
             dur = dur - DUR_OFFSET
             note = note - NOTE_OFFSET
