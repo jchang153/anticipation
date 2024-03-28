@@ -55,7 +55,7 @@ def extract_random(all_events, rate):
     return events, controls
 
 
-def extract_instruments(all_events, instruments):
+def extract_instruments(all_events, instruments, as_controls=True):
     events = []
     controls = []
     for time, dur, note in zip(all_events[0::3],all_events[1::3],all_events[2::3]):
@@ -65,7 +65,10 @@ def extract_instruments(all_events, instruments):
         instr = (note-NOTE_OFFSET)//2**7
         if instr in instruments:
             # mark this event as a control
-            controls.extend([CONTROL_OFFSET+time, CONTROL_OFFSET+dur, CONTROL_OFFSET+note])
+            if as_controls:
+                controls.extend([CONTROL_OFFSET+time, CONTROL_OFFSET+dur, CONTROL_OFFSET+note])
+            else:
+                controls.extend([time, dur, note])
         else:
             events.extend([time, dur, note])
 
