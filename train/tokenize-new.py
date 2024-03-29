@@ -44,9 +44,10 @@ def prepare_triplet_midi(midifile, vocab):
     return events
 
 
-def control_prefix(instruments, task, vocab):
+def control_prefix(instruments, human_instruments, task, vocab):
     task = vocab['task'][task]
     instr_offset = vocab['instrument_offset']
+    human_instr_offset = vocab['human_instrument_offset']
     separator = vocab['separator']
     pad = vocab['pad']
 
@@ -54,6 +55,11 @@ def control_prefix(instruments, task, vocab):
     # by convention, let's provide the list sorted by instrument code
     instr_controls = sorted(instruments)
     instr_controls = [instr_offset + instr for instr in instruments]
+
+    human_instr_controls = sorted(human_instruments)
+    human_instr_controls = [human_instr_offset + instr for instr in human_instruments]
+
+    instr_controls = instr_controls + human_instr_controls
 
     vocab_size = vocab['config']['size']
     assert max(instr_controls) < vocab_size
@@ -100,7 +106,7 @@ def pack_tokens(sequences, output, idx, vocab, prepare, prefix, seqlen):
             #   * extract the chord sequence to anticipate
             #   * extract the (randomly selected) "human" sequence to anti-anticipate
             
-            instruments = list(ops.get_instruments(events).keys())
+            instruments = sorted(list(ops.get_instruments(events).keys()))
 
             chords_program_num = vocab['chord_instrument'] - vocab['instrument_offset']
 
@@ -121,11 +127,12 @@ def pack_tokens(sequences, output, idx, vocab, prepare, prefix, seqlen):
 
             # extract the randomly selected "human" sequence to anti-anticipate
             human = np.random.choice(instruments, 1, replace=False)
+            instruments.remove(human[0])
             events, human_controls = extract_instruments(events, human, vocab)
 
             # get the global control tokens for this sequence
             # do this before padding because some ops don't handle REST properly
-            z_start, z_cont = prefix(instruments)
+            z_start, z_cont = prefix(instruments, human)
 
             # add rest tokens to events after extracting control tokens
             # (see Section 3.2 of the paper for why we do this)
@@ -159,7 +166,7 @@ def pack_tokens(sequences, output, idx, vocab, prepare, prefix, seqlen):
 
 
 def preprocess_midi(midifiles, output, seqlen, task, vocab, idx):
-    prefix = lambda instruments: control_prefix(instruments, task, vocab)
+    prefix = lambda instruments, human_instruments: control_prefix(instruments, human_instruments, task, vocab)
     prepare = lambda mid: prepare_triplet_midi(mid, vocab)
 
     return pack_tokens(midifiles, output, idx, vocab, prepare, prefix, seqlen=seqlen)

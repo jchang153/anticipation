@@ -48,7 +48,8 @@ AUTOREGRESS = SPECIAL_OFFSET + 1
 ANTICIPATE = SPECIAL_OFFSET + 2
 PAD = SPECIAL_OFFSET + 3
 INSTR_OFFSET = SPECIAL_OFFSET + 4        # instrument-conditioning tokens
-VOCAB_SIZE = INSTR_OFFSET+MAX_INSTR
+HUMAN_INSTR_OFFSET = INSTR_OFFSET + MAX_INSTR
+VOCAB_SIZE = HUMAN_INSTR_OFFSET+MAX_INSTR
 
 # chord conditioning
 CHORD_INSTR = INSTR_OFFSET + 101         # lead sheet stored in program_code=goblins
@@ -79,6 +80,7 @@ vocab = {
     'note_offset' : NOTE_OFFSET,
     'special_offset' : SPECIAL_OFFSET,
     'instrument_offset' : INSTR_OFFSET,
+    'human_instrument_offset' : HUMAN_INSTR_OFFSET,
     'control_offset': CONTROL_OFFSET,
     'chord_instrument': CHORD_INSTR
 }
