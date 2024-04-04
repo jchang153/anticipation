@@ -44,6 +44,56 @@ def print_tokens(tokens):
             print(j, tm, dur, instr, pitch, '(A)')
 
 
+def print_training_tokens(tokens):
+    print('j time dur instr pitch')
+    print('---------------------')
+    tokens = tokens[1:] # eat pad token
+    for j, (tm, dur, note) in enumerate(zip(tokens[0::3],tokens[1::3],tokens[2::3])):
+        if note == vocab['separator']:
+            assert tm == SEPARATOR and dur == SEPARATOR
+            print(j, 'SEPARATOR')
+            continue
+
+        if note == vocab['rest']:
+            assert tm < CONTROL_OFFSET
+            assert dur == DUR_OFFSET+0
+            print(j, tm, 'REST')
+            continue
+
+        if note < vocab['control_offset']:
+            tm = tm - vocab['time_offset']
+            dur = dur - vocab['duration_offset']
+            note = note - vocab['note_offset']
+            instr = note//2**7
+            pitch = note - (2**7)*instr
+            print(j, tm, dur, instr, pitch)
+            continue
+            
+        if vocab['control_offset'] < note < vocab['special_offset']:
+            tm = tm - ATIME_OFFSET
+            dur = dur - ADUR_OFFSET
+            note = note - ANOTE_OFFSET
+            instr = note//2**7
+            pitch = note - (2**7)*instr
+            print(j, tm, dur, instr, pitch, '(A)')
+            continue
+        else:
+            assert tm >= vocab['special_offset'] and dur >= vocab['special_offset']
+            print(j, 'CONTROL PREFIX')
+            for tok in [tm, dur, note]:
+                if tok > vocab['human_instrument_offset']:
+                    print('Instr: ', tok - vocab['human_instrument_offset'], '(H)')
+                elif tok not in [vocab['pad'], vocab['separator'], vocab['task']['autoregress'], vocab['task']['anticipate']]:
+                    print('Instr: ', tok - vocab['instrument_offset'])
+            if note == vocab['task']['autoregress']:
+                print('Task:   autoregress')
+            elif note == vocab['task']['anticipate']:
+                print('Task:   anticipate')
+            print('~~~~~~~~~~~~~~~~~~~~~')
+                
+            
+
+
 def clip(tokens, start, end, clip_duration=True, seconds=True):
     if seconds:
         start = int(TIME_RESOLUTION*start)
@@ -253,12 +303,21 @@ def sparsity(tokens):
 
     return max_dt
 
+def remove_prefix(tokens):
+    for i, tok in enumerate(tokens):
+        if (tok in list(range(vocab['time_offset'], vocab['time_offset'] + vocab['config']['max_time']))) or (tok in list(range(vocab['atime_offset'], vocab['atime_offset'] + vocab['config']['max_time']))):
+            return tokens[i:]
+    return tokens
 
 def min_time(tokens, seconds=True, instr=None):
     mt = None
+
+    # skip the first control block
+    tokens = remove_prefix(tokens)
+    
     for time, dur, note in zip(tokens[0::3],tokens[1::3],tokens[2::3]):
         # stop calculating at sequence separator
-        if note >= SEPARATOR: break
+        if note >= SPECIAL_OFFSET: break
 
         if note < CONTROL_OFFSET:
             time -= TIME_OFFSET
@@ -319,18 +378,24 @@ def translate(tokens, dt, seconds=False):
     if seconds:
         dt = int(TIME_RESOLUTION*dt)
 
-    new_tokens = []
+    # ignore first prefix:
+    for i, tok in enumerate(tokens):
+        if (tok in list(range(vocab['time_offset'], vocab['time_offset'] + vocab['config']['max_time']))) or (tok in list(range(vocab['atime_offset'], vocab['atime_offset'] + vocab['config']['max_time']))):
+            break
+    new_tokens = tokens[:i]
+    tokens = tokens[i:]
+    
     for (time, dur, note) in zip(tokens[0::3],tokens[1::3],tokens[2::3]):
-        # stop translating after EOT
-        if note >= SEPARATOR:
+        # stop translating after EOT, i.e. at next prefix
+        if note >= vocab['special_offset']:
             new_tokens.extend([time, dur, note])
             dt = 0
             continue
 
-        if note < CONTROL_OFFSET:
-            this_time = time - TIME_OFFSET
+        if note < vocab['control_offset']:
+            this_time = time - vocab['time_offset']
         else:
-            this_time = time - ATIME_OFFSET
+            this_time = time - vocab['atime_offset']
 
         assert 0 <= this_time + dt
         new_tokens.extend([time+dt, dur, note])
