@@ -312,6 +312,13 @@ def remove_prefix(tokens, return_index=False):
             return 0
         else:
             return tokens
+
+    if (tokens[0] in prefix_vocab) and (tokens[1] in list(range(vocab['aduration_offset'], vocab['aduration_offset'] + vocab['config']['max_duration']))):
+        # atime token overflow, return tokens
+        if return_index:
+            return 0
+        else:
+            return tokens
     
     for i, tok in enumerate(tokens):
         if tok not in prefix_vocab:
@@ -321,8 +328,10 @@ def remove_prefix(tokens, return_index=False):
                 else:
                     return tokens
             else:
-                assert(tokens[i-1] in [vocab['task']['anticipate'], vocab['task']['autoregress']])
-                # if this isn't satisfied, there is probably overflow into the control block
+                if (tokens[i-1] not in [vocab['task']['anticipate'], vocab['task']['autoregress']]):
+                    print(tokens)
+                    assert(False)
+                    # if this isn't satisfied, there is probably overflow into the control block
                 if return_index:
                     return i
                 else:
