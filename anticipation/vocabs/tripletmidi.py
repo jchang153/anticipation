@@ -63,6 +63,7 @@ vocab = {
         'max_note' : MAX_NOTE,
         'max_time' : MAX_TIME,
         'max_duration' : MAX_DUR,
+        'max_instrument' : MAX_INSTR,
         'size' : VOCAB_SIZE
     },
 

@@ -303,10 +303,31 @@ def sparsity(tokens):
 
     return max_dt
 
-def remove_prefix(tokens):
+def remove_prefix(tokens, return_index=False):
+    prefix_vocab = [vocab['pad']] + [vocab['separator']] + list(range(vocab['instrument_offset'], vocab['instrument_offset'] + vocab['config']['max_instrument'])) + list(range(vocab['human_instrument_offset'], vocab['human_instrument_offset'] + vocab['config']['max_instrument'])) + [vocab['task']['anticipate']] + [vocab['task']['autoregress']]
+    
+    if (tokens[0] in prefix_vocab) and (tokens[1] in list(range(vocab['duration_offset'], vocab['duration_offset'] + vocab['config']['max_duration']))):
+        # time token overflow, return tokens
+        if return_index:
+            return 0
+        else:
+            return tokens
+    
     for i, tok in enumerate(tokens):
-        if (tok in list(range(vocab['time_offset'], vocab['time_offset'] + vocab['config']['max_time']))) or (tok in list(range(vocab['atime_offset'], vocab['atime_offset'] + vocab['config']['max_time']))):
-            return tokens[i:]
+        if tok not in prefix_vocab:
+            if i == 0:
+                if return_index:
+                    return i
+                else:
+                    return tokens
+            else:
+                assert(tokens[i-1] in [vocab['task']['anticipate'], vocab['task']['autoregress']])
+                # if this isn't satisfied, there is probably overflow into the control block
+                if return_index:
+                    return i
+                else:
+                    return tokens[i:]
+    
     return tokens
 
 def min_time(tokens, seconds=True, instr=None):
@@ -379,11 +400,9 @@ def translate(tokens, dt, seconds=False):
         dt = int(TIME_RESOLUTION*dt)
 
     # ignore first prefix:
-    for i, tok in enumerate(tokens):
-        if (tok in list(range(vocab['time_offset'], vocab['time_offset'] + vocab['config']['max_time']))) or (tok in list(range(vocab['atime_offset'], vocab['atime_offset'] + vocab['config']['max_time']))):
-            break
-    new_tokens = tokens[:i]
-    tokens = tokens[i:]
+    start_idx = remove_prefix(tokens, return_index=True)
+    new_tokens = tokens[:start_idx]
+    tokens = tokens[start_idx:]
     
     for (time, dur, note) in zip(tokens[0::3],tokens[1::3],tokens[2::3]):
         # stop translating after EOT, i.e. at next prefix
