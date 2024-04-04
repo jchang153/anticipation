@@ -60,6 +60,7 @@ vocab = {
         'anticipation' : DELTA,
         'anti-anticipation' : HUMAN_DELTA,
         'midi_quantization' : MIDI_QUANTIZATION,
+        'max_note' : MAX_NOTE,
         'max_time' : MAX_TIME,
         'max_duration' : MAX_DUR,
         'size' : VOCAB_SIZE
@@ -76,8 +77,11 @@ vocab = {
 
     'event_offset' : EVENT_OFFSET,
     'time_offset' : TIME_OFFSET,
+    'atime_offset' : ATIME_OFFSET,
     'duration_offset' : DUR_OFFSET,
+    'aduration_offset' : ADUR_OFFSET,
     'note_offset' : NOTE_OFFSET,
+    'anote_offset' : ANOTE_OFFSET,
     'special_offset' : SPECIAL_OFFSET,
     'instrument_offset' : INSTR_OFFSET,
     'human_instrument_offset' : HUMAN_INSTR_OFFSET,
