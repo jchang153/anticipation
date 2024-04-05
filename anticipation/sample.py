@@ -14,26 +14,39 @@ from anticipation.vocab import * # TODO: Deprecate this
 from anticipation.vocabs.tripletmidi import vocab
 
 
-def safe_logits(logits, idx):
-    logits[CONTROL_OFFSET:SPECIAL_OFFSET] = -float('inf') # don't generate controls
-    logits[SPECIAL_OFFSET:] = -float('inf')               # don't generate special tokens
+def safe_logits(logits, idx, curtime=None, allowed_control_pn=None):
+    if allowed_control_pn is None:
+        # don't generate controls
+        logits[CONTROL_OFFSET:SPECIAL_OFFSET] = -float('inf') 
+    else:
+        # don't generate (pitch,instr) tokens that do not correspond to allowed_control_pn
+        instr = allowed_control_pn
+        logits[ANOTE_OFFSET:(ANOTE_OFFSET+instr*MAX_PITCH)] = -float('inf')
+        logits[(ANOTE_OFFSET+(instr+1)*MAX_PITCH):SPECIAL_OFFSET] = -float('inf')  
+
+        # only generate anti-anticipated atime tokens 
+        assert curtime is not None
+        logits[ATIME_OFFSET+curtime:ATIME_OFFSET+MAX_TIME] = -float('inf')     
+        
+    logits[SPECIAL_OFFSET:] = -float('inf') # don't generate special tokens
 
     # don't generate stuff in the wrong time slot
     if idx % 3 == 0:
-        logits[DUR_OFFSET:DUR_OFFSET+MAX_DUR] = -float('inf')
-        logits[NOTE_OFFSET:NOTE_OFFSET+MAX_NOTE] = -float('inf')
+        logits[vocab['duration_offset'] : vocab['duration_offset'] + vocab['config']['max_duration']] = -float('inf')
+        logits[vocab['note_offset']     : vocab['note_offset']     + vocab['config']['max_note']]     = -float('inf')
     elif idx % 3 == 1:
-        logits[TIME_OFFSET:TIME_OFFSET+MAX_TIME] = -float('inf')
-        logits[NOTE_OFFSET:NOTE_OFFSET+MAX_NOTE] = -float('inf')
+        logits[vocab['time_offset']     : vocab['time_offset']     + vocab['config']['max_time']]     = -float('inf')
+        logits[vocab['note_offset']     : vocab['note_offset']     + vocab['config']['max_note']]     = -float('inf')
     elif idx % 3 == 2:
-        logits[TIME_OFFSET:TIME_OFFSET+MAX_TIME] = -float('inf')
-        logits[DUR_OFFSET:DUR_OFFSET+MAX_DUR] = -float('inf')
+        logits[vocab['time_offset']     : vocab['time_offset']     + vocab['config']['max_time']]     = -float('inf')
+        logits[vocab['duration_offset'] : vocab['duration_offset'] + vocab['config']['max_duration']] = -float('inf')
 
     return logits
 
 
 def nucleus(logits, top_p):
     # from HF implementation
+
     if top_p < 1.0:
         sorted_logits, sorted_indices = torch.sort(logits, descending=True)
         cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
@@ -47,7 +60,7 @@ def nucleus(logits, top_p):
 
         # scatter sorted tensors to original indexing
         indices_to_remove = sorted_indices_to_remove.scatter(0, sorted_indices, sorted_indices_to_remove)
-        logits[indices_to_remove] = -float("inf")
+        logits[indices_to_remove] = -float("inf")               
 
     return logits
 
@@ -80,16 +93,22 @@ def masked_instr_logits(logits, masked_instrs):
 
     return logits
 
-def control_prefix(instruments, task, vocab):
+def control_prefix(instruments, human_instruments, task, vocab):
     task = vocab['task'][task]
     instr_offset = vocab['instrument_offset']
+    human_instr_offset = vocab['human_instrument_offset']
     separator = vocab['separator']
     pad = vocab['pad']
 
     # get the list of instruments to condition on
     # by convention, let's provide the list sorted by instrument code
     instr_controls = sorted(instruments)
-    instr_controls = [instr_offset + instr for instr in instr_controls]
+    instr_controls = [instr_offset + instr for instr in instruments]
+
+    human_instr_controls = sorted(human_instruments)
+    human_instr_controls = [human_instr_offset + instr for instr in human_instruments]
+
+    instr_controls = instr_controls + human_instr_controls
 
     vocab_size = vocab['config']['size']
     assert max(instr_controls) < vocab_size
@@ -109,14 +128,14 @@ def control_prefix(instruments, task, vocab):
 
     return z_start, z_cont
 
-def add_token(model, task, tokens, instruments, top_p, temperature, current_time, masked_instrs, debug=False):
+def add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, current_time, masked_instrs, allowed_control_pn=None, debug=False):
     pad = vocab['pad']
 
     assert len(tokens) % 3 == 0
 
     # get control global control prefix for the beginning of a sequence and the continuation of a sequence
     task_string = 'autoregress' if task == [AUTOREGRESS] else 'anticipate'
-    z_start, z_cont = control_prefix(instruments, task_string, vocab)
+    z_start, z_cont = control_prefix(instruments, human_instruments, task_string, vocab)
 
     history = tokens.copy()
     prefix = None
@@ -139,16 +158,20 @@ def add_token(model, task, tokens, instruments, top_p, temperature, current_time
             logits = model(input_tokens).logits[0,-1]
 
             idx = input_tokens.shape[1]-1
-            logits = safe_logits(logits, idx)
+            logits = safe_logits(logits, idx, allowed_control_pn)
             if i == 0:
                 logits = future_logits(logits, current_time - offset)
             elif i == 2:
                 logits = instr_logits(logits, tokens)
+
+            
             logits = masked_instr_logits(logits, masked_instrs)
+            
             logits = nucleus(logits, top_p)
 
             probs = F.softmax(logits/temperature, dim=-1)
             token = torch.multinomial(probs, 1)
+            
             new_token.append(int(token))
 
     new_token[0] += offset # revert to full sequence timing
@@ -157,7 +180,7 @@ def add_token(model, task, tokens, instruments, top_p, temperature, current_time
 
     return new_token
 
-def generate(model, start_time, end_time, inputs=None, chord_controls=None, human_controls=None, instruments=None, top_p=1.0, temperature=1.0, masked_instrs=[], debug=False, chord_delta=DELTA*TIME_RESOLUTION, human_delta=HUMAN_DELTA*TIME_RESOLUTION):
+def generate(model, start_time, end_time, inputs=None, chord_controls=None, human_controls=None, instruments=None, human_instruments=None, top_p=1.0, temperature=1.0, masked_instrs=[], debug=False, chord_delta=DELTA*TIME_RESOLUTION, human_delta=HUMAN_DELTA*TIME_RESOLUTION, return_controls=False, allowed_control_pn=None):
     
     if inputs is None:
         inputs = []
@@ -169,13 +192,16 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
         human_controls = []
 
     if instruments is None:
-        raise ValueError('Must provide instrument controls')
+        raise ValueError('Must provide list of instruments')
+
+    if human_instruments is None:
+        raise ValueError('Must provide list of human instruments s')
 
     start_time = int(TIME_RESOLUTION*start_time)
     end_time = int(TIME_RESOLUTION*end_time)
 
     # prompt is events up to start_time
-    prompt = ops.pad(ops.clip(inputs, 0, start_time, clip_duration=False), start_time)
+    prompt = ops.pad(ops.clip(inputs, 0, start_time, clip_duration=False), start_time) # bug? start_time isn't in seconds, which is the default for ops.clip()
 
     # treat events beyond start_time as controls
     future = ops.clip(inputs, start_time+1, ops.max_time(inputs, seconds=False), clip_duration=False)
@@ -260,7 +286,7 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
                         # nothing more to anti-anticipate
                         anti_anticipated_time = math.inf
 
-            new_token = add_token(model, task, tokens, instruments, top_p, temperature, max(start_time,current_time), masked_instrs, debug)
+            new_token = add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, max(start_time,current_time), masked_instrs, allowed_control_pn, debug)
             new_time = new_token[0] - TIME_OFFSET
             if new_time >= end_time:
                 break
@@ -277,8 +303,11 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
             current_time = new_time
             progress.update(dt)
 
-    events, _ = ops.split(tokens)
-    return ops.sort(ops.unpad(events) + future)
+    events, controls = ops.split(tokens)
+    if return_controls:
+        return ops.unpad(events), controls
+    else:
+        return ops.sort(ops.unpad(events) + future)
 
 
 def generate_ar(model, start_time, end_time, inputs=None, controls=None, top_p=1.0, temperature=1.0, masked_instrs=[], debug=False, delta=DELTA*TIME_RESOLUTION):
