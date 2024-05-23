@@ -306,7 +306,7 @@ def sparsity(tokens):
 def remove_prefix(tokens, return_index=False):
     prefix_vocab = [vocab['pad']] + [vocab['separator']] + list(range(vocab['instrument_offset'], vocab['instrument_offset'] + vocab['config']['max_instrument'])) + list(range(vocab['human_instrument_offset'], vocab['human_instrument_offset'] + vocab['config']['max_instrument'])) + [vocab['task']['anticipate']] + [vocab['task']['autoregress']]
     
-    if (tokens[0] in prefix_vocab) and (tokens[1] in list(range(vocab['duration_offset'], vocab['duration_offset'] + vocab['config']['max_duration']))):
+    if len(tokens) <= 1 or (tokens[0] in prefix_vocab) and (tokens[1] in list(range(vocab['duration_offset'], vocab['duration_offset'] + vocab['config']['max_duration']))):
         # time token overflow, return tokens
         if return_index:
             return 0
