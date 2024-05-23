@@ -498,5 +498,8 @@ def events_to_midi(tokens, vocab, debug=False):
 def midi_to_events(midifile, debug=False):
     return compound_to_events(midi_to_compound(midifile, vocab, debug=debug), vocab)
 
+def midi_to_events_new(midifile, debug=False):
+    return compound_to_events(midi_to_compound_new(midifile, vocab, debug=debug)[0], vocab)
+
 def midi_to_mm(midifile, vocab, debug=False):
     return compound_to_mm(midi_to_compound(midifile, vocab, debug=debug), vocab)
