@@ -115,7 +115,7 @@ if __name__ == '__main__':
             help='calculate loss for all checkpoints')
     parser.add_argument('-s', '--subsample', type=int, default=10,
             help='dataset subsampling ratio')
-    parser.add_argument('--type', default='quad',
+    parser.add_argument('--type', default='trip',
         help='type of vocabulary {trip|quad}')
 
     main(parser.parse_args())
