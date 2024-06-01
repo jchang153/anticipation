@@ -133,7 +133,7 @@ def interarrival_to_midi(tokens, debug=False):
 
     return mid
 
-def midi_to_compound_new(midifile, vocab, harmonize=False, debug=False):
+def midi_to_compound_new(midifile, vocab, only_piano=False, harmonize=False, debug=False):
     # This function uses miditoolkit instead of mido objects to satisfy chorder's requirements
 
     harmonized = 0
@@ -141,7 +141,24 @@ def midi_to_compound_new(midifile, vocab, harmonize=False, debug=False):
     if type(midifile) == str:
         midi = miditoolkit.MidiFile(midifile)
     else:
-        raise ValueError('midi_to_compound() requires a filepath to a midi file') 
+        raise ValueError('midi_to_compound() requires a filepath to a midi file')
+    
+    programs = [i.program for i in midi.instruments]
+    if (vocab['chord_instrument'] - vocab['instrument_offset']) in programs:
+        raise ValueError('Chord instrument already in midi file')
+    
+    if only_piano:
+        # check for exactly one program 0
+        program_zero_count = 0
+        for instrument in midi.instruments:
+            if instrument.program == 0 and len(instrument.notes) > 0 and not instrument.is_drum:
+                program_zero_count += 1
+
+        if program_zero_count != 1:
+            raise ValueError("Each file must have exactly one instrument with program number 0.")
+        
+        # remove piano before harmonizing
+        midi.instruments = [i for i in midi.instruments if i.program != 0]
 
     time_res = vocab['config']['midi_quantization']
     # midi.ticks_per_beat = time_res
@@ -397,7 +414,7 @@ def events_to_compound(tokens, debug=False):
     # move all tokens to zero-offset for synthesis
     tokens = [tok - control_offset if tok >= control_offset and tok != separator else tok
               for tok in tokens]
-
+    
     # remove type offsets
     tokens[0::3] = [tok - time_offset if tok != separator else tok for tok in tokens[0::3]]
     tokens[1::3] = [tok - duration_offset if tok != separator else tok for tok in tokens[1::3]]
@@ -426,12 +443,10 @@ def events_to_compound(tokens, debug=False):
     out[2::5] = [tok - (2**7)*(tok//2**7) for tok in tokens[2::3]]
     out[3::5] = [tok//2**7 for tok in tokens[2::3]]
     out[4::5] = (len(tokens)//3)*[72] # default velocity
-
-    # TODO: these macros come from config.py, should they instead be 
-    # read from vocab?
-    assert max(out[1::5]) < MAX_DUR
-    assert max(out[2::5]) < MAX_PITCH
-    assert max(out[3::5]) < MAX_INSTR
+    
+    assert max(out[1::5]) < vocab['config']['max_duration']
+    assert max(out[2::5]) < vocab['config']['max_note']
+    assert max(out[3::5]) < vocab['config']['max_instrument']
     assert all(tok >= 0 for tok in out)
 
     return out
