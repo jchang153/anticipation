@@ -43,7 +43,6 @@ def prepare_triplet_midi(midifile, vocab):
 
     return events
 
-
 def control_prefix(instruments, human_instruments, task, vocab):
     task = vocab['task'][task]
     instr_offset = vocab['instrument_offset']
@@ -80,7 +79,7 @@ def control_prefix(instruments, human_instruments, task, vocab):
     return z_start, z_cont
 
 
-def pack_tokens(sequences, output, idx, vocab, prepare, prefix, seqlen):
+def pack_tokens(sequences, output, idx, vocab, prepare, prefix, seqlen, piano_human_part=True):
     vocab_size = vocab['config']['size']
     pad = vocab['pad']
     files = bad_files = seqcount = 0
@@ -125,8 +124,12 @@ def pack_tokens(sequences, output, idx, vocab, prepare, prefix, seqlen):
                 if len(instruments) < 2:
                     continue
 
-            # extract the randomly selected "human" sequence to anti-anticipate
-            human = np.random.choice(instruments, 1, replace=False)
+            # extract piano or randomly selected "human" sequence to anti-anticipate
+            if piano_human_part:
+                human = [0]
+            else:
+                human = np.random.choice(instruments, 1, replace=False)
+
             instruments.remove(human[0])
             events, human_controls = extract_instruments(events, human, vocab)
 

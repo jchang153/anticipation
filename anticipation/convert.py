@@ -157,9 +157,6 @@ def midi_to_compound_new(midifile, vocab, only_piano=False, harmonize=False, deb
         if program_zero_count != 1:
             raise ValueError("Each file must have exactly one instrument with program number 0.")
         
-        # remove piano before harmonizing
-        midi.instruments = [i for i in midi.instruments if i.program != 0]
-
     time_res = vocab['config']['midi_quantization']
     # midi.ticks_per_beat = time_res
 
@@ -181,6 +178,11 @@ def midi_to_compound_new(midifile, vocab, only_piano=False, harmonize=False, deb
 
     if harmonize:
         mtk_midi_copy = deepcopy(midi)
+        
+        if only_piano:
+            # remove piano before harmonizing
+            mtk_midi_copy.instruments = [i for i in midi.instruments if i.program != 0]
+
         # add chords as markers
         mtk_midi_enchord = Dechorder.enchord(mtk_midi_copy)
         # convert markers to midi notes
