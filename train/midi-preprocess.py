@@ -28,7 +28,7 @@ def convert_midi(filename, only_piano, harmonize, output=None, debug=False):
 
         os.remove(output_filename)
 
-        if debug and harmonized == 0:
+        if debug and harmonized == 0 and harmonize == True:
             print('Failed to harmonize: ', filename)
 
     except Exception:
