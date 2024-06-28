@@ -1,10 +1,14 @@
 """
 API functions for sampling from anticipatory infilling models.
 """
+from typing import List
+
 import math
 
 import torch
 import torch.nn.functional as F
+import tvm
+import numpy as np
 
 from tqdm import tqdm
 
@@ -97,18 +101,22 @@ def construct_prompt(z, tokens, cache):
     return input_ids, cache, offset
 
 
-def add_token(model, z, tokens, top_p, temperature, current_time, masked_instrs, cache, debug=False):
+def add_token(model, z, tokens, top_p, temperature, current_time, masked_instrs, cache, debug=False, use_MLC=False):
     assert len(tokens) % 3 == 0
 
     new_token = []
     input_ids, cache, offset = construct_prompt(z, tokens, cache)
     with torch.no_grad():
         for i in range(3):
-            input_ids = input_ids.unsqueeze(0).to(model.device)
-            output = model(input_ids, past_key_values=cache, use_cache=True)
-
-            cache = output.past_key_values
-            logits = output.logits[0,-1]
+                        
+            if not use_MLC:
+                input_ids = input_ids.unsqueeze(0).to(model.device)
+                output = model(input_ids, past_key_values=cache, use_cache=True)
+                cache = output.past_key_values
+                logits = output.logits[0,-1]
+            else:
+                logits, cache = debugchat_forward(model, input_ids, cache)
+                logits = torch.tensor(logits)[0,0,:]
 
             idx = len(tokens) + i
             logits = safe_logits(logits, idx)
@@ -125,12 +133,12 @@ def add_token(model, z, tokens, top_p, temperature, current_time, masked_instrs,
 
     new_token[0] += offset # revert to full sequence timing
     if debug:
-        print(f'  OFFSET = {offset}, LEN = {len(history)}, TIME = {tokens[::3][-5:]}')
+        print(f'  OFFSET = {offset}, TIME = {tokens[::3][-5:]}')
 
     return new_token, cache
 
 
-def generate(model, start_time, end_time, inputs=None, controls=None, top_p=1.0, temperature=1.0, masked_instrs=[], debug=False, delta=DELTA*TIME_RESOLUTION):
+def generate(model, start_time, end_time, inputs=None, controls=None, top_p=1.0, temperature=1.0, masked_instrs=[], debug=False, delta=DELTA*TIME_RESOLUTION, use_MLC=False):
     if inputs is None:
         inputs = []
 
@@ -189,11 +197,14 @@ def generate(model, start_time, end_time, inputs=None, controls=None, top_p=1.0,
                 for new_token in [atime, adur, anote]:
                     with torch.no_grad():
                         # run the model as if we were going to use its prediction
-                        input_ids = input_ids.unsqueeze(0).to(model.device)
-                        cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
+                        if not use_MLC:
+                            input_ids = input_ids.unsqueeze(0).to(model.device)
+                            cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
+                        else:
+                            _, cache = debugchat_forward(model, input_ids, cache)
 
                     tokens.append(new_token)
-                    input_ids = torch.tensor(new_token)
+                    input_ids = torch.tensor(new_token).unsqueeze(0)
 
                 if debug:
                     note = anote - ANOTE_OFFSET
@@ -208,7 +219,7 @@ def generate(model, start_time, end_time, inputs=None, controls=None, top_p=1.0,
                     # nothing more to anticipate
                     anticipated_time = math.inf
 
-            new_token, cache = add_token(model, z, tokens, top_p, temperature, max(start_time,current_time), masked_instrs, cache)
+            new_token, cache = add_token(model, z, tokens, top_p, temperature, max(start_time,current_time), masked_instrs, cache, use_MLC=use_MLC)
             new_time = new_token[0] - TIME_OFFSET
             if new_time >= end_time:
                 break
@@ -227,3 +238,38 @@ def generate(model, start_time, end_time, inputs=None, controls=None, top_p=1.0,
 
     events, _ = ops.split(tokens)
     return ops.sort(ops.unpad(events) + future)
+
+
+def debugchat_forward(
+    dc,
+    input_tokens,
+    kv_caches
+):
+    """
+    Parameters
+    ----------
+    dc : DebugChat
+        The DebugChat object that contains the model and tokenizer
+        for generating the response.
+        
+    input_tokens : List[str]
+        Either a prompt to the model if kv_caches is None, or the last token.
+
+    temperature : float
+        Softmax temperature for sampling.
+        
+    top_p : float
+        Nucleus sampling parameter.
+    """
+
+    assert((len(input_tokens) == 1 and kv_caches is not None) or (kv_caches is None))
+
+    if kv_caches is None:
+        input_tokens = tvm.nd.array(np.array(input_tokens).astype("int32"), device=dc.device)
+        embedding, input_len = dc._embed(input_tokens)
+        logits, kv_caches = dc._prefill(embedding, input_len)
+    else:
+        last_token = input_tokens[-1]
+        logits = dc._decode(last_token, kv_caches)
+    
+    return logits.numpy(), kv_caches
