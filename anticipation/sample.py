@@ -5,6 +5,8 @@ import math
 
 import torch
 import torch.nn.functional as F
+import tvm
+import numpy as np
 
 from tqdm import tqdm
 
@@ -160,18 +162,21 @@ def construct_prompt(instruments, human_instruments, task, tokens, cache, vocab)
 
     return input_ids, cache, offset
 
-def add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, current_time, masked_instrs, cache, allowed_control_pn=None, debug=False):
+def add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, current_time, masked_instrs, cache, allowed_control_pn=None, debug=False, use_MLC=False):
     assert len(tokens) % 3 == 0
 
     new_token = []
     input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab)
     with torch.no_grad():
         for i in range(3):
-            input_ids = input_ids.unsqueeze(0).to(model.device)
-            output = model(input_ids, past_key_values=cache, use_cache=True)
-            
-            cache = output.past_key_values
-            logits = output.logits[0,-1]
+            if not use_MLC:
+                input_ids = input_ids.unsqueeze(0).to(model.device)
+                output = model(input_ids, past_key_values=cache, use_cache=True)
+                cache = output.past_key_values
+                logits = output.logits[0,-1]
+            else:
+                logits, cache = debugchat_forward(model, input_ids, cache)
+                logits = torch.tensor(logits)[0,0,:]
 
             idx = len(tokens) + i
             logits = safe_logits(logits, idx, allowed_control_pn)
@@ -192,7 +197,7 @@ def add_token(model, task, tokens, instruments, human_instruments, top_p, temper
 
     return new_token, cache
 
-def generate(model, start_time, end_time, inputs=None, chord_controls=None, human_controls=None, instruments=None, human_instruments=None, top_p=1.0, temperature=1.0, masked_instrs=[], debug=False, chord_delta=DELTA*TIME_RESOLUTION, human_delta=HUMAN_DELTA*TIME_RESOLUTION, return_controls=False, allowed_control_pn=None):
+def generate(model, start_time, end_time, inputs=None, chord_controls=None, human_controls=None, instruments=None, human_instruments=None, top_p=1.0, temperature=1.0, masked_instrs=[], debug=False, chord_delta=DELTA*TIME_RESOLUTION, human_delta=HUMAN_DELTA*TIME_RESOLUTION, return_controls=False, allowed_control_pn=None, use_MLC=False):
     
     if inputs is None:
         inputs = []
@@ -275,8 +280,11 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
                     for new_token in [atime, adur, anote]:
                         with torch.no_grad():
                             # run the model as if we were going to use its prediction
-                            input_ids = input_ids.unsqueeze(0).to(model.device)
-                            cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
+                            if not use_MLC:
+                                input_ids = input_ids.unsqueeze(0).to(model.device)
+                                cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
+                            else:
+                                _, cache = debugchat_forward(model, input_ids, cache)
 
                         tokens.append(new_token)
                         input_ids = torch.tensor(new_token)
@@ -318,7 +326,7 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
                         # nothing more to anti-anticipate
                         anti_anticipated_time = math.inf
 
-            new_token, cache = add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, max(start_time,current_time), masked_instrs, cache, allowed_control_pn, debug)
+            new_token, cache = add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, max(start_time,current_time), masked_instrs, cache, allowed_control_pn, debug, use_MLC=use_MLC)
             new_time = new_token[0] - TIME_OFFSET
             if new_time >= end_time:
                 break
@@ -340,3 +348,37 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
         return ops.unpad(events), controls
     else:
         return ops.sort(ops.unpad(events) + future)
+
+def debugchat_forward(
+    dc,
+    input_tokens,
+    kv_caches
+):
+    """
+    Parameters
+    ----------
+    dc : DebugChat
+        The DebugChat object that contains the model and tokenizer
+        for generating the response.
+        
+    input_tokens : List[str]
+        Either a prompt to the model if kv_caches is None, or the last token.
+
+    temperature : float
+        Softmax temperature for sampling.
+        
+    top_p : float
+        Nucleus sampling parameter.
+    """
+
+    assert((len(input_tokens) == 1 and kv_caches is not None) or (kv_caches is None))
+
+    if kv_caches is None:
+        input_tokens = tvm.nd.array(np.array(input_tokens).astype("int32"), device=dc.device)
+        embedding, input_len = dc._embed(input_tokens)
+        logits, kv_caches = dc._prefill(embedding, input_len)
+    else:
+        last_token = input_tokens[-1]
+        logits = dc._decode(last_token, kv_caches)
+    
+    return logits.numpy(), kv_caches
