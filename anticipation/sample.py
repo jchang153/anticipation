@@ -128,10 +128,8 @@ def control_prefix(instruments, human_instruments, task, vocab):
 
     return z_start, z_cont
 
-def add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, current_time, masked_instrs, allowed_control_pn=None, debug=False):
+def construct_prompt(instruments, human_instruments, task, tokens, cache, vocab):
     pad = vocab['pad']
-
-    assert len(tokens) % 3 == 0
 
     # get control global control prefix for the beginning of a sequence and the continuation of a sequence
     task_string = 'autoregress' if task == [AUTOREGRESS] else 'anticipate'
@@ -140,45 +138,59 @@ def add_token(model, task, tokens, instruments, human_instruments, top_p, temper
     history = tokens.copy()
     prefix = None
 
-    if (len(tokens) + len(z_start) + 1) >= 1024:
-        lookback = len(tokens) - (1024 - len(z_cont) - 3) # we generate three tokens at a time
-        prefix = z_cont
-    else:
-        lookback = max(len(tokens) - (1024 - len(z_start) - 1), 0)
+    if (len(tokens) + len(z_start) + 1) < 1024:
+        lookback = 0
         prefix = [pad] + z_start
+    else:
+        # if we hopped, flush the cache
+        if (len(tokens) + len(z_start) + 1) == 1024 or ((len(tokens) + len(z_cont)) % 255 < 3):
+            cache = None
+
+        # compute quantized lookback for caching with z_cont
+        lookback = max(len(tokens) + len(z_cont) - 768 - ((len(tokens) + len(z_cont)) % 255), 0)
+        prefix = z_cont 
 
     history = history[lookback:] # Markov window
     offset = ops.min_time(history, seconds=False)
     history[::3] = [tok - offset for tok in history[::3]] # relativize time in the history buffer
 
+    input_ids = torch.tensor(prefix + history)
+    if cache:
+        input_ids = input_ids[-1:]
+
+    return input_ids, cache, offset
+
+def add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, current_time, masked_instrs, cache, allowed_control_pn=None, debug=False):
+    assert len(tokens) % 3 == 0
+
     new_token = []
+    input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab)
     with torch.no_grad():
         for i in range(3):
-            input_tokens = torch.tensor(prefix + history + new_token).unsqueeze(0).to(model.device)
-            logits = model(input_tokens).logits[0,-1]
+            input_ids = input_ids.unsqueeze(0).to(model.device)
+            output = model(input_ids, past_key_values=cache, use_cache=True)
+            
+            cache = output.past_key_values
+            logits = output.logits[0,-1]
 
-            idx = input_tokens.shape[1]-1
+            idx = len(tokens) + i
             logits = safe_logits(logits, idx, allowed_control_pn)
             if i == 0:
                 logits = future_logits(logits, current_time - offset)
             elif i == 2:
                 logits = instr_logits(logits, tokens)
-
-            
             logits = masked_instr_logits(logits, masked_instrs)
-            
             logits = nucleus(logits, top_p)
 
             probs = F.softmax(logits/temperature, dim=-1)
-            token = torch.multinomial(probs, 1)
-            
-            new_token.append(int(token))
+            input_ids = torch.multinomial(probs, 1)
+            new_token.append(int(input_ids))
 
     new_token[0] += offset # revert to full sequence timing
     if debug:
-        print(f'  OFFSET = {offset}, LEN = {len(history)}, TIME = {tokens[::3][-5:]}')
+        print(f'  OFFSET = {offset}, TIME = {tokens[::3][-5:]}')
 
-    return new_token
+    return new_token, cache
 
 def generate(model, start_time, end_time, inputs=None, chord_controls=None, human_controls=None, instruments=None, human_instruments=None, top_p=1.0, temperature=1.0, masked_instrs=[], debug=False, chord_delta=DELTA*TIME_RESOLUTION, human_delta=HUMAN_DELTA*TIME_RESOLUTION, return_controls=False, allowed_control_pn=None):
     
@@ -235,7 +247,7 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
     current_time = ops.max_time(prompt, seconds=False)
     if debug:
         print('Current time:', current_time)
-
+    
     with tqdm(range(end_time-start_time)) as progress:
         if chord_controls:
             atime, adur, anote = chord_controls[0:3]
@@ -253,10 +265,21 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
             # nothing to anti-anticipate
             anti_anticipated_time = math.inf
 
+        cache = None
         while True:
             while (current_time >= anticipated_time - chord_delta) or (current_time >= anti_anticipated_time - human_delta):
                 if (anticipated_time - chord_delta <= anti_anticipated_time - human_delta):
-                    tokens.extend([atime, adur, anote])
+
+                    # update the cache
+                    input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab)
+                    for new_token in [atime, adur, anote]:
+                        with torch.no_grad():
+                            # run the model as if we were going to use its prediction
+                            input_ids = input_ids.unsqueeze(0).to(model.device)
+                            cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
+
+                        tokens.append(new_token)
+                        input_ids = torch.tensor(new_token)
 
                     if debug:
                         note = anote - ANOTE_OFFSET
@@ -271,7 +294,16 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
                         # nothing more to anticipate
                         anticipated_time = math.inf
                 else:
-                    tokens.extend([aatime, aadur, aanote])
+                    # update the cache
+                    input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab)
+                    for new_token in [atime, adur, anote]:
+                        with torch.no_grad():
+                            # run the model as if we were going to use its prediction
+                            input_ids = input_ids.unsqueeze(0).to(model.device)
+                            cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
+
+                        tokens.append(new_token)
+                        input_ids = torch.tensor(new_token)
 
                     if debug:
                         note = aanote - ANOTE_OFFSET
@@ -286,7 +318,7 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
                         # nothing more to anti-anticipate
                         anti_anticipated_time = math.inf
 
-            new_token = add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, max(start_time,current_time), masked_instrs, allowed_control_pn, debug)
+            new_token, cache = add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, max(start_time,current_time), masked_instrs, cache, allowed_control_pn, debug)
             new_time = new_token[0] - TIME_OFFSET
             if new_time >= end_time:
                 break
