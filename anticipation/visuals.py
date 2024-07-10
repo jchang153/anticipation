@@ -18,7 +18,8 @@ def visualize(tokens, output, vocab, selected=None):
 
     plt.rcParams['figure.dpi'] = 300
     plt.rcParams['savefig.dpi'] = 300
- 
+    
+    controls_present = False
     max_time = ops.max_time(tokens, seconds=False)
     grid = np.zeros([max_time, MAX_PITCH])
     control_grid = np.zeros([max_time, MAX_PITCH], dtype=bool)
@@ -58,6 +59,7 @@ def visualize(tokens, output, vocab, selected=None):
         
         grid[tm:tm+dur, pitch] = 1 + instruments.index(instr)
         if is_control:
+            controls_present = True
             control_grid[tm:tm+dur, pitch] = True
 
     plt.clf()
@@ -75,13 +77,22 @@ def visualize(tokens, output, vocab, selected=None):
     for i in range(control_grid.shape[1]):
         for j in range(control_grid.shape[0]):
             if control_grid[j, i]:
-                rect = patches.Rectangle((j-0.5, control_grid.shape[1]-i-1.5), 1, 1, 
-                                          alpha=0.45, linestyle='--', facecolor='black')
-                ax.add_patch(rect)
-    
+                # rect = patches.Rectangle((j-0.5, control_grid.shape[1]-i-1.5), 1, 1, 
+                                          # alpha=1, fill=False, edgecolor='red', linewidth=.05)
+                # rect = patches.Rectangle((j-0.5, control_grid.shape[1]-i-1.5), 1, 1, 
+                #                           alpha=0.45, linestyle='--', facecolor='black')
+                # ax.add_patch(rect)
+
+                top_edge =    plt.Line2D([j-0.5, j+0.5], [control_grid.shape[1]-i-1.5, control_grid.shape[1]-i-1.5], color='black', linewidth=1)
+            
+                ax.add_line(top_edge)
+
+
     legend_patches = [matplotlib.patches.Patch(color=colors[i+1], label=f"{instruments[i]}")
                       for i in range(len(instruments))]
-    legend_patches.append(matplotlib.patches.Patch(facecolor='black', alpha=0.65, label='Control'))
+
+    if controls_present:
+        legend_patches.append(matplotlib.patches.Patch(facecolor='black', alpha=1, label='Control'))
     
     plt.legend(handles=legend_patches, bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
     plt.tight_layout()
