@@ -20,11 +20,13 @@ def safe_logits(logits, idx, curtime=None, allowed_control_pn=None):
     if allowed_control_pn is None:
         # don't generate controls
         logits[CONTROL_OFFSET:SPECIAL_OFFSET] = -float('inf') 
+        logits[vocab['instrument_offset']:] = -float('inf') 
     else:
         # don't generate (pitch,instr) tokens that do not correspond to allowed_control_pn
         instr = allowed_control_pn
         logits[ANOTE_OFFSET:(ANOTE_OFFSET+instr*MAX_PITCH)] = -float('inf')
         logits[(ANOTE_OFFSET+(instr+1)*MAX_PITCH):SPECIAL_OFFSET] = -float('inf')  
+        logits[vocab['instrument_offset']:] = -float('inf')
 
         # only generate anti-anticipated atime tokens 
         assert curtime is not None
@@ -178,18 +180,48 @@ def add_token(model, task, tokens, instruments, human_instruments, top_p, temper
                 logits, cache = debugchat_forward(model, input_ids, cache)
                 logits = torch.tensor(logits)[0,0,:]
 
+            # og_logits = logits.clone()
+            
             idx = len(tokens) + i
             logits = safe_logits(logits, idx, allowed_control_pn)
+
+            # safel_logits = logits.clone()
             if i == 0:
                 logits = future_logits(logits, current_time - offset)
             elif i == 2:
                 logits = instr_logits(logits, tokens)
+
+            # instrl_logits = logits.clone()
             logits = masked_instr_logits(logits, masked_instrs)
             logits = nucleus(logits, top_p)
-
+                
             probs = F.softmax(logits/temperature, dim=-1)
+            # if use_MLC: # in torch 2.0.1, torch.multinomial has a bug on CPU where it samples zero prob events
+            #     probs.to(str(model.device)[:-3]) 
+            # else:
+            #     probs.to(model.device)
             input_ids = torch.multinomial(probs, 1)
             new_token.append(int(input_ids))
+
+            # if (i == 1 and int(input_ids) < vocab['duration_offset']) or (int(input_ids)) > CONTROL_OFFSET:
+            #     print(i, '\n')
+            #     torch.save(probs, 'probs_test.txt')
+            #     print("Post nucleus control logits in range: ", CONTROL_OFFSET, SPECIAL_OFFSET, torch.min(logits[CONTROL_OFFSET:SPECIAL_OFFSET]).item(), torch.max(logits[CONTROL_OFFSET:SPECIAL_OFFSET]).item())
+            #     print("Probs limits in range: ", CONTROL_OFFSET, SPECIAL_OFFSET, torch.min(probs[CONTROL_OFFSET:SPECIAL_OFFSET]).item(), torch.max(probs[CONTROL_OFFSET:SPECIAL_OFFSET]).item())
+            #     print("Control range zero? ", (probs[27513:55025] == 0).any())
+            #     print("Time range zero? ", (probs[vocab['time_offset']:vocab['time_offset']+vocab['config']['max_time']] == 0).any())
+            #     print("Dur range nonzero? ", (probs[vocab['duration_offset']:vocab['duration_offset']+vocab['config']['max_duration']] != 0).any())
+            #     print("PitchInstr range zero? ", (probs[vocab['note_offset']:vocab['note_offset']+vocab['config']['max_note']] == 0).any())
+            #     print('input_ids', input_ids, ' cache==None ', cache==None)
+            #     print('Probs limits: ', torch.min(probs).item(), torch.max(probs).item())
+            #     print('\n')
+            #     print("og_Logits range:", torch.min(og_logits).item(), torch.max(og_logits).item())
+            #     print("safel_Logits range:", torch.min(safel_logits).item(), torch.max(safel_logits).item())
+            #     print("instrl_Logits range:", torch.min(instrl_logits).item(), torch.max(instrl_logits).item(), i)
+            #     print(current_time, offset, current_time - offset)
+            #     print("Logits range:", torch.min(logits).item(), torch.max(logits).item())
+            #     print(tokens)
+                
 
     new_token[0] += offset # revert to full sequence timing
     if debug:
@@ -364,11 +396,7 @@ def debugchat_forward(
     input_tokens : List[str]
         Either a prompt to the model if kv_caches is None, or the last token.
 
-    temperature : float
-        Softmax temperature for sampling.
-        
-    top_p : float
-        Nucleus sampling parameter.
+    kv_caches :
     """
 
     assert((len(input_tokens) == 1 and kv_caches is not None) or (kv_caches is None))
