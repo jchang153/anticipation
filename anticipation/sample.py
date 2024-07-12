@@ -250,16 +250,16 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
     end_time = int(TIME_RESOLUTION*end_time)
 
     # prompt is events up to start_time
-    prompt = ops.pad(ops.clip(inputs, 0, start_time, clip_duration=False), start_time) # bug? start_time isn't in seconds, which is the default for ops.clip()
+    prompt = ops.pad(ops.clip(inputs, 0, start_time, seconds=False, clip_duration=False), start_time)
 
     # treat events beyond start_time as controls
-    future = ops.clip(inputs, start_time+1, ops.max_time(inputs, seconds=False), clip_duration=False)
+    future = ops.clip(inputs, start_time+1, ops.max_time(inputs, seconds=False), seconcds=False, clip_duration=False)
     if debug:
         print('Future')
         ops.print_tokens(future)
 
     # clip chord controls that preceed the sequence
-    chord_controls = ops.clip(chord_controls, DELTA, ops.max_time(chord_controls, seconds=False), clip_duration=False)
+    chord_controls = ops.clip(chord_controls, DELTA, ops.max_time(chord_controls, seconds=False), seconds=False, clip_duration=False)
 
     if debug:
         print('Chord Controls')
