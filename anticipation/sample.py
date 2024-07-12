@@ -253,7 +253,7 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
     prompt = ops.pad(ops.clip(inputs, 0, start_time, seconds=False, clip_duration=False), start_time)
 
     # treat events beyond start_time as controls
-    future = ops.clip(inputs, start_time+1, ops.max_time(inputs, seconds=False), seconcds=False, clip_duration=False)
+    future = ops.clip(inputs, start_time+1, ops.max_time(inputs, seconds=False), seconds=False, clip_duration=False)
     if debug:
         print('Future')
         ops.print_tokens(future)
