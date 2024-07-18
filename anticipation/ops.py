@@ -81,7 +81,7 @@ def print_training_tokens(tokens):
             assert tm >= vocab['special_offset'] and dur >= vocab['special_offset']
             print(j, 'CONTROL PREFIX')
             for tok in [tm, dur, note]:
-                if tok > vocab['human_instrument_offset']:
+                if tok >= vocab['human_instrument_offset']:
                     print('Instr: ', tok - vocab['human_instrument_offset'], '(H)')
                 elif tok not in [vocab['pad'], vocab['separator'], vocab['task']['autoregress'], vocab['task']['anticipate']]:
                     print('Instr: ', tok - vocab['instrument_offset'])
