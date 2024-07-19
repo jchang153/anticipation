@@ -336,7 +336,7 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
                 else:
                     # update the cache
                     input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab)
-                    for new_token in [atime, adur, anote]:
+                    for new_token in [aatime, aadur, aanote]:
                         with torch.no_grad():
                             # run the model as if we were going to use its prediction
                             input_ids = input_ids.unsqueeze(0).to(model.device)
