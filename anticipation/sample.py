@@ -309,7 +309,7 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
 
                     # update the cache
                     input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab)
-                    for new_token in [atime, adur, anote]:
+                    for new_token in [atime-offset, adur, anote]:
                         with torch.no_grad():
                             # run the model as if we were going to use its prediction
                             if not use_MLC:
@@ -319,7 +319,7 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
                                 _, cache = debugchat_forward(model, input_ids, cache)
 
                         tokens.append(new_token)
-                        input_ids = torch.tensor(new_token)
+                        input_ids = torch.tensor([new_token])
 
                     if debug:
                         note = anote - ANOTE_OFFSET
@@ -336,14 +336,16 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
                 else:
                     # update the cache
                     input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab)
-                    for new_token in [aatime, aadur, aanote]:
+                    for new_token in [aatime-offset, aadur, aanote]:
                         with torch.no_grad():
                             # run the model as if we were going to use its prediction
-                            input_ids = input_ids.unsqueeze(0).to(model.device)
-                            cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
-
+                            if not use_MLC:
+                                input_ids = input_ids.unsqueeze(0).to(model.device)
+                                cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
+                            else:
+                                _, cache = debugchat_forward(model, input_ids, cache)
                         tokens.append(new_token)
-                        input_ids = torch.tensor(new_token)
+                        input_ids = torch.tensor([new_token])
 
                     if debug:
                         note = aanote - ANOTE_OFFSET
