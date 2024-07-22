@@ -186,7 +186,7 @@ def generate(model, start_time, end_time, inputs=None, controls=None, top_p=1.0,
             while current_time >= anticipated_time - delta:
                 # update the cache
                 input_ids, cache, offset = construct_prompt(z, tokens, cache)
-                for new_token in [atime, adur, anote]:
+                for new_token in [atime-offset, adur, anote]:
                     with torch.no_grad():
                         # run the model as if we were going to use its prediction
                         input_ids = input_ids.unsqueeze(0).to(model.device)
