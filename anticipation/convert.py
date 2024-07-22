@@ -144,7 +144,7 @@ def midi_to_compound_new(midifile, vocab, only_piano=False, harmonize=False, deb
         raise ValueError('midi_to_compound() requires a filepath to a midi file')
     
     programs = [i.program for i in midi.instruments]
-    if (vocab['chord_instrument'] - vocab['instrument_offset']) in programs:
+    if harmonize and (vocab['chord_instrument'] - vocab['instrument_offset']) in programs:
         raise ValueError('Chord instrument already in midi file')
     
     if only_piano:
