@@ -202,7 +202,7 @@ def pack_tokens(sequences, output, idx, vocab, prepare, prefix, seqlen, live=Fal
                 all_events = events.copy()
 
                 # different random augmentations
-                augment_factor = 30
+                augment_factor = 1
                 for k in range(augment_factor): # using default augment_factor from original paper
                     if k % 10 == 0:
                         # no augmentation
