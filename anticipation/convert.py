@@ -19,6 +19,8 @@ import sys
 from chorder.chorder import Chord, Dechorder, chord_to_midi, play_chords
 from copy import deepcopy
 
+from math import floor
+
 
 def midi_to_interarrival(midifile, debug=False, stats=False):
     midi = mido.MidiFile(midifile)
@@ -209,8 +211,8 @@ def midi_to_compound_new(midifile, vocab, only_piano=False, harmonize=False, deb
 
             token = []
 
-            token.append(round(time_res * ticks_to_sec_map[note.start]))
-            token.append(round(time_res * ticks_to_sec_map[note.end - note.start]))
+            token.append(floor(time_res * ticks_to_sec_map[note.start]))
+            token.append(floor(time_res * ticks_to_sec_map[note.end - note.start]))
             token.append(note.pitch)
             assert (-1 <= instr < 129)
             token.append(instr)
