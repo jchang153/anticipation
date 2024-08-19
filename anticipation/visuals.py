@@ -20,7 +20,7 @@ def visualize(tokens, output, vocab, selected=None):
     plt.rcParams['savefig.dpi'] = 300
     
     controls_present = False
-    max_time = ops.max_time(tokens, seconds=False)
+    max_time = ops.max_time_including_duration(tokens, seconds=False)
     grid = np.zeros([max_time, MAX_PITCH])
     control_grid = np.zeros([max_time, MAX_PITCH], dtype=bool)
     instruments = list(sorted(list(ops.get_instruments(tokens).keys())))

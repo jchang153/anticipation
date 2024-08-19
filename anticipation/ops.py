@@ -387,6 +387,28 @@ def max_time(tokens, seconds=True, instr=None):
 
     return mt/float(TIME_RESOLUTION) if seconds else mt
 
+def max_time_including_duration(tokens, seconds=True, instr=None):
+    mt = 0
+    for time, dur, note in zip(tokens[0::3],tokens[1::3],tokens[2::3]):
+        # skip the control block
+        if note >= SPECIAL_OFFSET: continue
+
+        if note < CONTROL_OFFSET:
+            time -= TIME_OFFSET
+            dur -= DUR_OFFSET
+            note -= NOTE_OFFSET
+        else:
+            time -= ATIME_OFFSET
+            dur -= ADUR_OFFSET
+            note -= ANOTE_OFFSET
+
+        # max time of a particular instrument
+        if instr is not None and instr != note//2**7:
+            continue
+
+        mt = max(mt, time+dur)
+
+    return mt/float(TIME_RESOLUTION) if seconds else mt
 
 def get_instruments(tokens):
     instruments = defaultdict(int)
