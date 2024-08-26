@@ -132,7 +132,7 @@ def control_prefix(instruments, human_instruments, task, vocab):
 
     return z_start, z_cont
 
-def construct_prompt(instruments, human_instruments, task, tokens, cache, vocab):
+def construct_prompt(instruments, human_instruments, task, tokens, cache, vocab, force_z_cont=False):
     pad = vocab['pad']
 
     # get control global control prefix for the beginning of a sequence and the continuation of a sequence
@@ -144,7 +144,11 @@ def construct_prompt(instruments, human_instruments, task, tokens, cache, vocab)
 
     if (len(tokens) + len(z_start) + 1) < 1024:
         lookback = 0
-        prefix = [pad] + z_start
+        if force_z_cont: # this is a hack to act like an continuation; see heuristic in live generation loop
+            prefix = z_cont
+        else:
+            prefix = [pad] + z_start
+
     else:
         # if we hopped, flush the cache
         if (len(tokens) + len(z_start) + 1) == 1024 or ((len(tokens) + len(z_cont)) % 255 < 3):
@@ -164,11 +168,11 @@ def construct_prompt(instruments, human_instruments, task, tokens, cache, vocab)
 
     return input_ids, cache, offset
 
-def add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, current_time, masked_instrs, cache, allowed_control_pn=None, debug=False, use_MLC=False):
+def add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, current_time, masked_instrs, cache, allowed_control_pn=None, debug=False, use_MLC=False, force_z_cont=False):
     assert len(tokens) % 3 == 0
 
     new_token = []
-    input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab)
+    input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab, force_z_cont=force_z_cont)
     with torch.no_grad():
         for i in range(3):
             if not use_MLC:
