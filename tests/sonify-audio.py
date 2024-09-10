@@ -25,7 +25,7 @@ if __name__ == '__main__':
     if args.vocab == 'audio':
         from anticipation.audiovocab import vocab
     elif args.vocab == 'mm':
-        from anticipation.mmvocab import vocab
+        from anticipation.vocabs.mmvocab import vocab
     else:
         raise ValueError(f'Invalid vocabulary type "{args.vocab}"')
 
