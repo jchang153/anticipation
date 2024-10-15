@@ -416,3 +416,146 @@ def debugchat_forward(
         logits = dc._decode(last_token, kv_caches)
     
     return logits.numpy(), kv_caches
+
+def _generate_live_chunk(
+        model, 
+        start_time, 
+        end_time, 
+        inputs=None, 
+        chord_controls=None, 
+        human_controls=None, 
+        instruments=None, 
+        human_instruments=None, 
+        top_p=1.0, 
+        temperature=1.0, 
+        masked_instrs=[], 
+        debug=False, 
+        chord_delta=DELTA*TIME_RESOLUTION, 
+        human_delta=HUMAN_DELTA*TIME_RESOLUTION, 
+        use_MLC=True,
+        force_z_cont=False
+    ):
+
+    if inputs is None:
+        inputs = []
+
+    if chord_controls is None:
+        chord_controls = []
+
+    if human_controls is None:
+        human_controls = []
+
+    if instruments is None:
+        raise ValueError('Must provide list of instruments')
+
+    if human_instruments is None:
+        raise ValueError('Must provide list of human instruments s')
+
+    start_time = int(TIME_RESOLUTION*start_time)
+    end_time = int(TIME_RESOLUTION*end_time)
+
+    chord_delta = DELTA*TIME_RESOLUTION
+    human_delta = HUMAN_DELTA*TIME_RESOLUTION
+
+    # prompt is events up to start_time
+    prompt = ops.pad(ops.clip(inputs, 0, start_time, seconds=False, clip_duration=False), start_time)
+
+    task = [AUTOREGRESS] # task is hardcoded to autoregress in live models
+
+    # interleave the chord_controls and human_controls with the events
+    # note that we merge future with chord_controls, as they are both anticipated
+    # tokens, controls = ops.anticipate(prompt, ops.sort(controls + [CONTROL_OFFSET+token for token in future]))
+    tokens, chord_controls, human_controls = ops.anticipate_and_anti_anticipate(prompt, chord_controls, human_controls, chord_delta=chord_delta, human_delta=human_delta)
+
+    # snap.append(construct_prompt(instruments, human_instruments, task, tokens, None, vocab, force_z_cont=force_z_cont)[0])
+
+    current_time = ops.max_time(prompt, seconds=False)
+
+    if len(tokens) > 1024:
+        print(f"t = {current_time}, Outer loop: CONTEXT LENGTH REACHED")
+
+    # Main generation loop
+    with tqdm(range(end_time-start_time)) as progress:
+        if chord_controls:
+            atime, adur, anote = chord_controls[0:3]
+            anticipated_tokens = chord_controls[3:]
+            anticipated_time = atime - ATIME_OFFSET
+        else:
+            # nothing to anticipate
+            anticipated_time = math.inf
+
+        if human_controls:
+            aatime, aadur, aanote = human_controls[0:3]
+            anti_anticipated_tokens = human_controls[3:]
+            anti_anticipated_time = aatime - ATIME_OFFSET
+        else:
+            # nothing to anti-anticipate
+            anti_anticipated_time = math.inf
+
+        cache = None
+        while True:
+            while (current_time >= anticipated_time - chord_delta) or (current_time >= anti_anticipated_time - human_delta):
+                if (anticipated_time - chord_delta <= anti_anticipated_time - human_delta):
+
+                    # update the cache
+                    input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab, force_z_cont=force_z_cont)
+                    for new_token in [atime-offset, adur, anote]:
+                        with torch.no_grad():
+                            # run the model as if we were going to use its prediction
+                            if not use_MLC:
+                                input_ids = input_ids.unsqueeze(0).to(model.device)
+                                cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
+                            else:
+                                _, cache = debugchat_forward(model, input_ids, cache)
+
+                        tokens.append(new_token)
+                        input_ids = torch.tensor([new_token])
+
+                    if len(anticipated_tokens) > 0:
+                        atime, adur, anote = anticipated_tokens[0:3]
+                        anticipated_tokens = anticipated_tokens[3:]
+                        anticipated_time = atime - ATIME_OFFSET
+                    else:
+                        # nothing more to anticipate
+                        anticipated_time = math.inf
+                else:
+                    # update the cache
+                    input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab, force_z_cont=force_z_cont)
+                    for new_token in [aatime-offset, aadur, aanote]:
+                        with torch.no_grad():
+                            # run the model as if we were going to use its prediction
+                            if not use_MLC:
+                                input_ids = input_ids.unsqueeze(0).to(model.device)
+                                cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
+                            else:
+                                _, cache = debugchat_forward(model, input_ids, cache)
+                        tokens.append(new_token)
+                        input_ids = torch.tensor([new_token])
+
+                    if len(anti_anticipated_tokens) > 0:
+                        aatime, aadur, aanote = anti_anticipated_tokens[0:3]
+                        anti_anticipated_tokens = anti_anticipated_tokens[3:]
+                        anti_anticipated_time = aatime - ATIME_OFFSET
+                    else:
+                        # nothing more to anti-anticipate
+                        anti_anticipated_time = math.inf
+
+            new_token, cache = add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, max(start_time,current_time), masked_instrs, cache, allowed_control_pn=None, debug=False, use_MLC=use_MLC, force_z_cont=force_z_cont)
+            new_time = new_token[0] - TIME_OFFSET
+            if new_time >= end_time:
+                break
+
+            tokens.extend(new_token)
+            dt = new_time - current_time
+            assert dt >= 0
+            current_time = new_time
+            progress.update(dt)
+        
+            if len(tokens) > 1024:
+                print(f"t = {current_time}, Inner loop: CONTEXT LENGTH REACHED")
+
+    new_events, controls = ops.split(tokens)
+
+    new_events = ops.sort(ops.unpad(new_events))
+
+    return new_events
