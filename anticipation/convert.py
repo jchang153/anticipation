@@ -511,6 +511,47 @@ def compound_to_mm(tokens, vocab, stats=False):
     return mm_tokens
 
 
+def make_events_safe(events):
+    """
+    Adjusts durations in an events list to prevent overlapping notes for each instrument.
+    Events are triplets of (time, duration, note) tokens.
+    """
+    # Group events by note (which encodes both pitch and instrument)
+    note_events = {}
+    for i in range(0, len(events), 3):
+        time = events[i]
+        dur = events[i+1] 
+        note = events[i+2]
+        
+        if note not in note_events:
+            note_events[note] = []
+        note_events[note].append((i, time, dur))
+
+    # For each note, check and fix overlaps
+    for note, note_list in note_events.items():
+        # Sort by time
+        sorted_events = sorted(note_list, key=lambda x: x[1])
+        
+        # Check consecutive pairs
+        for j in range(len(sorted_events)-1):
+            curr_idx, curr_time, curr_dur = sorted_events[j]
+            next_idx, next_time, _ = sorted_events[j+1]
+            
+            # Convert to absolute time by removing offsets
+            curr_abs_time = curr_time - vocab['time_offset']
+            next_abs_time = next_time - vocab['time_offset']
+            curr_abs_dur = curr_dur - vocab['duration_offset']
+            
+            # Check for overlap
+            if curr_abs_time + curr_abs_dur >= next_abs_time:
+                # Adjust duration to end 1 tick before next note
+                new_abs_dur = next_abs_time - curr_abs_time - 1
+                # Update duration token in original events list
+                events[curr_idx + 1] = vocab['duration_offset'] + new_abs_dur
+
+    return events
+
+
 def events_to_midi(tokens, vocab, debug=False):
     return compound_to_midi(events_to_compound(tokens, debug=debug), vocab, debug=debug)
 
