@@ -515,7 +515,11 @@ def make_events_safe(events):
     """
     Adjusts durations in an events list to prevent overlapping notes for each instrument.
     Events are triplets of (time, duration, note) tokens.
+    Returns a new events list with adjusted durations.
     """
+    # Create a copy of events list
+    events = events.copy()
+    
     # Group events by note (which encodes both pitch and instrument)
     note_events = {}
     for i in range(0, len(events), 3):
@@ -538,16 +542,25 @@ def make_events_safe(events):
             next_idx, next_time, _ = sorted_events[j+1]
             
             # Convert to absolute time by removing offsets
-            curr_abs_time = curr_time - vocab['time_offset']
-            next_abs_time = next_time - vocab['time_offset']
-            curr_abs_dur = curr_dur - vocab['duration_offset']
+            # For control tokens, subtract both control offset and regular offset
+            if note >= vocab['control_offset']:
+                curr_abs_time = curr_time - vocab['control_offset'] - vocab['time_offset']
+                next_abs_time = next_time - vocab['control_offset'] - vocab['time_offset']
+                curr_abs_dur = curr_dur - vocab['control_offset'] - vocab['duration_offset']
+            else:
+                curr_abs_time = curr_time - vocab['time_offset']
+                next_abs_time = next_time - vocab['time_offset']
+                curr_abs_dur = curr_dur - vocab['duration_offset']
             
             # Check for overlap
             if curr_abs_time + curr_abs_dur >= next_abs_time:
                 # Adjust duration to end 1 tick before next note
                 new_abs_dur = next_abs_time - curr_abs_time - 1
-                # Update duration token in original events list
-                events[curr_idx + 1] = vocab['duration_offset'] + new_abs_dur
+                # Update duration token in new events list with appropriate offset(s)
+                if note >= vocab['control_offset']:
+                    events[curr_idx + 1] = vocab['control_offset'] + vocab['duration_offset'] + new_abs_dur
+                else:
+                    events[curr_idx + 1] = vocab['duration_offset'] + new_abs_dur
 
     return events
 
