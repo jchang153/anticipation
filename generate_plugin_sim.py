@@ -1,10 +1,7 @@
-import sys,time,os, random
+import time, os, random
 
 import midi2audio
-import transformers
 from transformers import AutoModelForCausalLM
-
-from IPython.display import Audio
 
 from anticipation import ops
 from anticipation.sample import generate, control_prefix
@@ -15,13 +12,11 @@ from anticipation.config import *
 from anticipation.vocab import *
 from anticipation.vocabs.tripletmidi import vocab
 from anticipation.sample import _generate_live_chunk
-
+from anticipation.convert import make_events_safe
+from anticipation.sample import nucleus, debugchat_forward
 
 import torch
 import torch.nn.functional as F
-from anticipation.sample import nucleus, debugchat_forward
-
-from anticipation.convert import make_events_safe
 
 if not torch.cuda.is_available():
     # Ignore on cluster. Needed for fluidsynth to work locally:
@@ -31,6 +26,8 @@ if not torch.cuda.is_available():
 
 from pathlib import Path
 from mlc_llm.testing.debug_chat import DebugChat
+
+### INITIALIZE MODEL
 
 # HF models
 # AMT_MED = '/juice4/scr4/nlp/music/lakh-checkpoints/futile-think-tank-272/step-800000/hf'
@@ -76,31 +73,7 @@ model_mlc = DebugChat(
     debug_instrument=DummyDebugInstrument(Path("./debug-anticipation"))
 )
 
-# a MIDI synthesizer
-fs = midi2audio.FluidSynth('/usr/share/sounds/sf2/FluidR3_GM.sf2')
-
-# the MIDI synthesis script
-def synthesize(fs, tokens):
-    mid = events_to_midi(tokens, vocab)
-    mid.save('tmp.mid')
-    fs.midi_to_audio('tmp.mid', 'tmp.wav')
-    return 'tmp.wav'
-
-def synthesize_miditoolkit(fs, mf):
-    mf.dump('tmp.mid')
-    fs.midi_to_audio('tmp.mid', 'tmp.wav')
-    return 'tmp.wav'
-
-# Remove prefix by finding the first index that is either within the TIME block or ATIME block
-def remove_prefix(tokens):
-    for i, tok in enumerate(tokens):
-        if (tok in list(range(vocab['time_offset'], vocab['time_offset'] + vocab['config']['max_time']))) or (tok in list(range(vocab['atime_offset'], vocab['atime_offset'] + vocab['config']['max_time']))):
-            return tokens[i:]
-    return tokens
-
-
-
-#### CHORDER DEPENDENCIES
+### CHORDER DEPENDENCIES
 
 from chorder.chorder import Chord, Dechorder, chord_to_midi, play_chords
 from miditoolkit import MidiFile
@@ -157,9 +130,7 @@ def extract_human_and_chords(midifile_path, human_program_num=None, return_non_h
     return (human_events, chord_events)
 
 
-##########
-
-
+### INITIALIZE PROMPT
 
 filename = "b0ea637882ee7911da70d75f0b726992.mid"
 human_instr = 0
@@ -170,15 +141,10 @@ original_events, _ = extract_instruments(original_events, [128])
 # remove silence in the beginning
 original_events = ops.translate(original_events, -ops.min_time(original_events, seconds=False), seconds=False)
 
-
-
 human_events, chord_events, agent_events = extract_human_and_chords(original, human_program_num=human_instr, return_non_human_events=True, relativize_time=True)
 
 # ONLY FOR ALL THE THINGS YOU ARE!!
 agent_events, _ = extract_instruments(agent_events, [35], as_controls=False)
-
-
-
 
 def jitter(all_events, time_range, dur_range, only_instrs=None):
     events = []
@@ -230,12 +196,11 @@ def sort_tokens(tokens):
     flattened_list = [token for sublist in sorted_sublists for token in sublist]
     return flattened_list
 
-
 human_events = jitter(human_events, 4, 3)
 agent_events = jitter(agent_events, 4, 3)
 
+### SIMULATE HUMAN INPUT
 
-#Simulate live human input
 clock_start = time.time()
 
 simulation_start_time = 8 # NOTE: in the plugin, this function is triggered a second before simulation_start_time!
@@ -243,6 +208,7 @@ simulation_end_time = 60
 
 GENERATION_INTERVAL = 2
 
+use_MLC = False
 use_file = False
 impose_sorting = True
 
@@ -281,7 +247,7 @@ for st in range(simulation_start_time, simulation_end_time+1, GENERATION_INTERVA
 
     if use_file:
         accompaniment = _generate_live_chunk(
-            model_mlc, 
+            model_mlc if use_MLC else model, 
             inputs=file_inputs, 
             chord_controls=file_chord_controls, 
             human_controls=file_human_controls, 
@@ -293,24 +259,24 @@ for st in range(simulation_start_time, simulation_end_time+1, GENERATION_INTERVA
             top_p=.99, 
             masked_instrs=masked_instrs,
             debug=False,
-            use_MLC=True, 
+            use_MLC=use_MLC, 
             force_z_cont=force_z_cont)
     else:
 
-        with open(f'{start_time}_input_events_nb.txt', 'w') as f:
+        with open(f'generate_plugin_sim/snapshots/{start_time}_input_events_nb.txt', 'w') as f:
             f.write(str(inputs))
         
-        with open(f'{start_time}_chord_controls_nb.txt', 'w') as f:
+        with open(f'generate_plugin_sim/snapshots/{start_time}_chord_controls_nb.txt', 'w') as f:
             f.write(str(chord_controls))
 
-        with open(f'{start_time}_human_controls_nb.txt', 'w') as f:
+        with open(f'generate_plugin_sim/snapshots/{start_time}_human_controls_nb.txt', 'w') as f:
             f.write(str(human_controls))
 
-        with open(f'{start_time}_human_events_nb.txt', 'w') as f:
+        with open(f'generate_plugin_sim/snapshots/{start_time}_human_events_nb.txt', 'w') as f:
             f.write(str(human_events))
 
         accompaniment = _generate_live_chunk(
-            model_mlc, 
+            model_mlc if use_MLC else model, 
             inputs=inputs, 
             chord_controls=chord_controls, 
             human_controls=human_controls, 
@@ -322,7 +288,7 @@ for st in range(simulation_start_time, simulation_end_time+1, GENERATION_INTERVA
             top_p=1.0, 
             masked_instrs=masked_instrs,
             debug=False,
-            use_MLC=True, 
+            use_MLC=use_MLC, 
             force_z_cont=force_z_cont)
         
     # Recursive input: add accompaniment to inputs
@@ -331,7 +297,7 @@ for st in range(simulation_start_time, simulation_end_time+1, GENERATION_INTERVA
     clock_end = time.time()
     generation_time = clock_end - clock_start
     if generation_time > GENERATION_INTERVAL:
-        print("Generation time exceeded interval!")
+        print("Time to generate slower than real-time!")
     clock_start = clock_end
 
 ops.print_tokens(inputs)
