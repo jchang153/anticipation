@@ -260,19 +260,22 @@ for st in range(simulation_start_time, simulation_end_time+1, GENERATION_INTERVA
             masked_instrs=masked_instrs,
             debug=False,
             use_MLC=use_MLC, 
-            force_z_cont=force_z_cont)
+            force_z_cont=force_z_cont,
+            save_input_ids_and_logits=True)
     else:
 
-        with open(f'generate_plugin_sim/snapshots/{start_time}_input_events_nb.txt', 'w') as f:
+        os.makedirs(f'generate_plugin_sim/inputs_as_parts', exist_ok=True)
+
+        with open(f'generate_plugin_sim/inputs_as_parts/{start_time}_input_events_nb.txt', 'w') as f:
             f.write(str(inputs))
         
-        with open(f'generate_plugin_sim/snapshots/{start_time}_chord_controls_nb.txt', 'w') as f:
+        with open(f'generate_plugin_sim/inputs_as_parts/{start_time}_chord_controls_nb.txt', 'w') as f:
             f.write(str(chord_controls))
 
-        with open(f'generate_plugin_sim/snapshots/{start_time}_human_controls_nb.txt', 'w') as f:
+        with open(f'generate_plugin_sim/inputs_as_parts/{start_time}_human_controls_nb.txt', 'w') as f:
             f.write(str(human_controls))
 
-        with open(f'generate_plugin_sim/snapshots/{start_time}_human_events_nb.txt', 'w') as f:
+        with open(f'generate_plugin_sim/inputs_as_parts/{start_time}_human_events_nb.txt', 'w') as f:
             f.write(str(human_events))
 
         accompaniment = _generate_live_chunk(
@@ -289,7 +292,8 @@ for st in range(simulation_start_time, simulation_end_time+1, GENERATION_INTERVA
             masked_instrs=masked_instrs,
             debug=False,
             use_MLC=use_MLC, 
-            force_z_cont=force_z_cont)
+            force_z_cont=force_z_cont,
+            save_input_ids_and_logits=True)
         
     # Recursive input: add accompaniment to inputs
     inputs = accompaniment
