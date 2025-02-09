@@ -168,7 +168,7 @@ def construct_prompt(instruments, human_instruments, task, tokens, cache, vocab,
 
     return input_ids, cache, offset
 
-def add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, current_time, masked_instrs, cache, allowed_control_pn=None, debug=False, use_MLC=False, force_z_cont=False):
+def add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, current_time, masked_instrs, cache, allowed_control_pn=None, debug=False, use_MLC=False, force_z_cont=False, save_input_ids_and_logits=False):
     assert len(tokens) % 3 == 0
 
     new_token = []
@@ -176,10 +176,20 @@ def add_token(model, task, tokens, instruments, human_instruments, top_p, temper
     with torch.no_grad():
         for i in range(3):
             if not use_MLC:
+                if save_input_ids_and_logits:
+                    import os
+                    os.makedirs('generate_plugin_sim/input_ids_and_logits', exist_ok=True)
+                    with open(f'generate_plugin_sim/input_ids_and_logits/input_ids_{len(tokens)}_{i}.txt', 'w') as f:
+                        f.write(str(input_ids.tolist()))
                 input_ids = input_ids.unsqueeze(0).to(model.device)
                 output = model(input_ids, past_key_values=cache, use_cache=True)
                 cache = output.past_key_values
                 logits = output.logits[0,-1]
+                if save_input_ids_and_logits:
+                    import os
+                    os.makedirs('generate_plugin_sim/input_ids_and_logits', exist_ok=True)
+                    with open(f'generate_plugin_sim/input_ids_and_logits/logits_{len(tokens)}_{i}.txt', 'w') as f:
+                        f.write(str(logits.tolist()))
             else:
                 logits, cache = debugchat_forward(model, input_ids, cache)
                 logits = torch.tensor(logits)[0,0,:]
@@ -233,7 +243,7 @@ def add_token(model, task, tokens, instruments, human_instruments, top_p, temper
 
     return new_token, cache
 
-def generate(model, start_time, end_time, inputs=None, chord_controls=None, human_controls=None, instruments=None, human_instruments=None, top_p=1.0, temperature=1.0, masked_instrs=[], debug=False, chord_delta=DELTA*TIME_RESOLUTION, human_delta=HUMAN_DELTA*TIME_RESOLUTION, return_controls=False, allowed_control_pn=None, use_MLC=False):
+def generate(model, start_time, end_time, inputs=None, chord_controls=None, human_controls=None, instruments=None, human_instruments=None, top_p=1.0, temperature=1.0, masked_instrs=[], debug=False, chord_delta=DELTA*TIME_RESOLUTION, human_delta=HUMAN_DELTA*TIME_RESOLUTION, return_controls=False, allowed_control_pn=None, use_MLC=False, save_input_ids_and_logits=False):
     
     if inputs is None:
         inputs = []
@@ -317,8 +327,20 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
                         with torch.no_grad():
                             # run the model as if we were going to use its prediction
                             if not use_MLC:
+                                if save_input_ids_and_logits:
+                                    import os
+                                    os.makedirs('generate_plugin_sim/input_ids_and_logits', exist_ok=True)
+                                    with open(f'generate_plugin_sim/input_ids_and_logits/input_ids_{len(tokens)}.txt', 'w') as f:
+                                        f.write(str(input_ids.tolist()))
                                 input_ids = input_ids.unsqueeze(0).to(model.device)
-                                cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
+                                output = model(input_ids, past_key_values=cache, use_cache=True)
+                                cache = output.past_key_values
+                                logits = output.logits[0,-1]
+                                if save_input_ids_and_logits:
+                                    import os
+                                    os.makedirs('generate_plugin_sim/input_ids_and_logits', exist_ok=True)
+                                    with open(f'generate_plugin_sim/input_ids_and_logits/logits_{len(tokens)}_{i}.txt', 'w') as f:
+                                        f.write(str(logits.tolist()))
                             else:
                                 _, cache = debugchat_forward(model, input_ids, cache)
 
@@ -340,12 +362,24 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
                 else:
                     # update the cache
                     input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab)
-                    for new_token in [aatime-offset, aadur, aanote]:
+                    for i, new_token in enumerate([aatime-offset, aadur, aanote]):
                         with torch.no_grad():
                             # run the model as if we were going to use its prediction
                             if not use_MLC:
+                                if save_input_ids_and_logits:
+                                    import os
+                                    os.makedirs('generate_plugin_sim/input_ids_and_logits', exist_ok=True)
+                                    with open(f'generate_plugin_sim/input_ids_and_logits/input_ids_{len(tokens)}_{i}.txt', 'w') as f:
+                                        f.write(str(input_ids.tolist()))
                                 input_ids = input_ids.unsqueeze(0).to(model.device)
-                                cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
+                                output = model(input_ids, past_key_values=cache, use_cache=True)
+                                cache = output.past_key_values
+                                logits = output.logits[0,-1]
+                                if save_input_ids_and_logits:
+                                    import os
+                                    os.makedirs('generate_plugin_sim/input_ids_and_logits', exist_ok=True)
+                                    with open(f'generate_plugin_sim/input_ids_and_logits/logits_{len(tokens)}_{i}.txt', 'w') as f:
+                                        f.write(str(logits.tolist()))
                             else:
                                 _, cache = debugchat_forward(model, input_ids, cache)
                         tokens.append(new_token)
@@ -364,7 +398,7 @@ def generate(model, start_time, end_time, inputs=None, chord_controls=None, huma
                         # nothing more to anti-anticipate
                         anti_anticipated_time = math.inf
 
-            new_token, cache = add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, max(start_time,current_time), masked_instrs, cache, allowed_control_pn, debug, use_MLC=use_MLC)
+            new_token, cache = add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, max(start_time,current_time), masked_instrs, cache, allowed_control_pn, debug, use_MLC, force_z_cont=force_z_cont, save_input_ids_and_logits=save_input_ids_and_logits)
             new_time = new_token[0] - TIME_OFFSET
             if new_time >= end_time:
                 break
@@ -433,7 +467,8 @@ def _generate_live_chunk(
         chord_delta=DELTA*TIME_RESOLUTION, 
         human_delta=HUMAN_DELTA*TIME_RESOLUTION, 
         use_MLC=True,
-        force_z_cont=False
+        force_z_cont=False,
+        save_input_ids_and_logits=False
     ):
 
     if inputs is None:
@@ -499,12 +534,24 @@ def _generate_live_chunk(
 
                     # update the cache
                     input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab, force_z_cont=force_z_cont)
-                    for new_token in [atime-offset, adur, anote]:
+                    for i, new_token in enumerate([atime-offset, adur, anote]):
                         with torch.no_grad():
                             # run the model as if we were going to use its prediction
                             if not use_MLC:
+                                if save_input_ids_and_logits:
+                                    import os
+                                    os.makedirs('generate_plugin_sim/input_ids_and_logits', exist_ok=True)
+                                    with open(f'generate_plugin_sim/input_ids_and_logits/input_ids_{len(tokens)}_{i}.txt', 'w') as f:
+                                        f.write(str(input_ids.tolist()))
                                 input_ids = input_ids.unsqueeze(0).to(model.device)
-                                cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
+                                output = model(input_ids, past_key_values=cache, use_cache=True)
+                                cache = output.past_key_values
+                                logits = output.logits[0, -1]
+                                if save_input_ids_and_logits:
+                                    import os
+                                    os.makedirs('generate_plugin_sim/input_ids_and_logits', exist_ok=True)
+                                    with open(f'generate_plugin_sim/input_ids_and_logits/logits_{len(tokens)}_{i}.txt', 'w') as f:
+                                        f.write(str(logits.tolist()))
                             else:
                                 _, cache = debugchat_forward(model, input_ids, cache)
 
@@ -521,12 +568,24 @@ def _generate_live_chunk(
                 else:
                     # update the cache
                     input_ids, cache, offset = construct_prompt(instruments, human_instruments, task, tokens, cache, vocab, force_z_cont=force_z_cont)
-                    for new_token in [aatime-offset, aadur, aanote]:
+                    for i, new_token in enumerate([aatime-offset, aadur, aanote]):
                         with torch.no_grad():
                             # run the model as if we were going to use its prediction
                             if not use_MLC:
+                                if save_input_ids_and_logits:
+                                    import os
+                                    os.makedirs('generate_plugin_sim/input_ids_and_logits', exist_ok=True)
+                                    with open(f'generate_plugin_sim/input_ids_and_logits/input_ids_{len(tokens)}_{i}.txt', 'w') as f:
+                                        f.write(str(input_ids.tolist()))
                                 input_ids = input_ids.unsqueeze(0).to(model.device)
-                                cache = model(input_ids, past_key_values=cache, use_cache=True).past_key_values
+                                output = model(input_ids, past_key_values=cache, use_cache=True)
+                                cache = output.past_key_values
+                                logits = output.logits[0, -1]
+                                if save_input_ids_and_logits:
+                                    import os
+                                    os.makedirs('generate_plugin_sim/input_ids_and_logits', exist_ok=True)
+                                    with open(f'generate_plugin_sim/input_ids_and_logits/logits_{len(tokens)}_{i}.txt', 'w') as f:
+                                        f.write(str(logits.tolist()))
                             else:
                                 _, cache = debugchat_forward(model, input_ids, cache)
                         tokens.append(new_token)
@@ -540,7 +599,11 @@ def _generate_live_chunk(
                         # nothing more to anti-anticipate
                         anti_anticipated_time = math.inf
 
-            new_token, cache = add_token(model, task, tokens, instruments, human_instruments, top_p, temperature, max(start_time,current_time), masked_instrs, cache, allowed_control_pn=None, debug=False, use_MLC=use_MLC, force_z_cont=force_z_cont)
+            new_token, cache = add_token(
+                model, task, tokens, instruments, human_instruments, top_p, temperature,
+                max(start_time, current_time), masked_instrs, cache, allowed_control_pn=None, debug=False,
+                use_MLC=use_MLC, force_z_cont=force_z_cont, save_input_ids_and_logits=save_input_ids_and_logits
+            )
             new_time = new_token[0] - TIME_OFFSET
             if new_time >= end_time:
                 break
