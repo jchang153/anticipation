@@ -511,14 +511,14 @@ def compound_to_mm(tokens, vocab, stats=False):
     return mm_tokens
 
 
-def make_events_safe(events):
+def make_events_safe(input_events):
     """
     Adjusts durations in an events list to prevent overlapping notes for each instrument.
     Events are triplets of (time, duration, note) tokens.
     Returns a new events list with adjusted durations.
     """
     # Create a copy of events list
-    events = events.copy()
+    events = input_events.copy()
     
     # Group events by note (which encodes both pitch and instrument)
     note_events = {}

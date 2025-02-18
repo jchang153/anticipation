@@ -622,3 +622,288 @@ def _generate_live_chunk(
     new_events = ops.sort(ops.unpad(new_events))
 
     return new_events
+
+# Helpers for non-caching generation
+
+def construct_prompt_no_cache(instruments, human_instruments, task, tokens, vocab, force_z_cont=False):
+    pad = vocab['pad']
+
+    # get control global control prefix for the beginning of a sequence and the continuation of a sequence
+    task_string = 'autoregress' if task == [AUTOREGRESS] else 'anticipate'
+    z_start, z_cont = control_prefix(instruments, human_instruments, task_string, vocab)
+
+    history = tokens.copy()
+    prefix = None
+
+    if (len(tokens) + len(z_start) + 1) < 1024:
+        lookback = 0
+        if force_z_cont: # this is a hack to act like an continuation; see heuristic in live generation loop
+            prefix = z_cont
+        else:
+            prefix = [pad] + z_start
+    else:
+        # compute lookback to stay within context window
+        lookback = max(len(tokens) - (1024 - len(z_cont)), 0)
+        prefix = z_cont
+
+    history = history[lookback:] # Markov window
+    offset = ops.min_time(history, seconds=False)
+    history[::3] = [tok - offset for tok in history[::3]] # relativize time in the history buffer
+
+    input_ids = torch.tensor(prefix + history)
+    return input_ids, offset
+
+def add_token_no_cache(model, task, tokens, instruments, human_instruments, top_p, temperature, current_time, masked_instrs, allowed_control_pn=None, debug=False, use_MLC=False, force_z_cont=False, save_input_ids_and_logits=False):
+    assert len(tokens) % 3 == 0
+
+    # MLC always requires cache? not using here for now
+
+    new_token = []
+    input_ids, offset = construct_prompt_no_cache(instruments, human_instruments, task, tokens, vocab, force_z_cont=force_z_cont)
+    with torch.no_grad():
+        for i in range(3):
+            if save_input_ids_and_logits:
+                import os
+                os.makedirs('generate_plugin_sim/input_ids_and_logits', exist_ok=True)
+                with open(f'generate_plugin_sim/input_ids_and_logits/input_ids_{len(tokens)}_{i}.txt', 'w') as f:
+                    f.write(str(input_ids.tolist()))
+            input_ids = input_ids.unsqueeze(0).to(model.device)
+            output = model(input_ids)
+            logits = output.logits[0,-1]
+            if save_input_ids_and_logits:
+                import os
+                os.makedirs('generate_plugin_sim/input_ids_and_logits', exist_ok=True)
+                with open(f'generate_plugin_sim/input_ids_and_logits/logits_{len(tokens)}_{i}.txt', 'w') as f:
+                    f.write(str(logits.tolist()))
+            
+            idx = len(tokens) + i
+            logits = safe_logits(logits, idx, allowed_control_pn)
+
+            if i == 0:
+                logits = future_logits(logits, current_time - offset)
+            elif i == 2:
+                logits = instr_logits(logits, tokens)
+
+            logits = masked_instr_logits(logits, masked_instrs)
+            logits = nucleus(logits, top_p)
+                
+            probs = F.softmax(logits/temperature, dim=-1)
+            input_ids = torch.multinomial(probs, 1)
+            new_token.append(int(input_ids))
+
+
+    new_token[0] += offset # revert to full sequence timing
+    if debug:
+        print(f'  OFFSET = {offset}, TIME = {tokens[::3][-5:]}')
+
+    return new_token
+
+def _generate_live_chunk_no_cache(
+        model, 
+        start_time, 
+        end_time, 
+        inputs=None, 
+        chord_controls=None, 
+        human_controls=None, 
+        instruments=None, 
+        human_instruments=None, 
+        top_p=1.0, 
+        temperature=1.0, 
+        masked_instrs=[], 
+        debug=False, 
+        chord_delta=DELTA*TIME_RESOLUTION, 
+        human_delta=HUMAN_DELTA*TIME_RESOLUTION,
+        force_z_cont=False,
+        save_input_ids_and_logits=False,
+        use_MLC=False
+    ):
+
+    if inputs is None:
+        inputs = []
+
+    if chord_controls is None:
+        chord_controls = []
+
+    if human_controls is None:
+        human_controls = []
+
+    if instruments is None:
+        raise ValueError('Must provide list of instruments')
+
+    if human_instruments is None:
+        raise ValueError('Must provide list of human instruments s')
+
+    start_time = int(TIME_RESOLUTION*start_time)
+    end_time = int(TIME_RESOLUTION*end_time)
+
+    chord_delta = DELTA*TIME_RESOLUTION
+    human_delta = HUMAN_DELTA*TIME_RESOLUTION
+
+    # prompt is events up to start_time
+    prompt = ops.pad(ops.clip(inputs, 0, start_time, seconds=False, clip_duration=False), start_time)
+
+    task = [AUTOREGRESS] # task is hardcoded to autoregress in live models
+
+    # interleave the chord_controls and human_controls with the events
+    tokens, chord_controls, human_controls = ops.anticipate_and_anti_anticipate(prompt, chord_controls, human_controls, chord_delta=chord_delta, human_delta=human_delta)
+
+    current_time = ops.max_time(prompt, seconds=False)
+
+    if len(tokens) > 1024:
+        print(f"t = {current_time}, Outer loop: CONTEXT LENGTH REACHED")
+
+    # Main generation loop
+    with tqdm(range(end_time-start_time)) as progress:
+        if chord_controls:
+            atime, adur, anote = chord_controls[0:3]
+            anticipated_tokens = chord_controls[3:]
+            anticipated_time = atime - ATIME_OFFSET
+        else:
+            # nothing to anticipate
+            anticipated_time = math.inf
+
+        if human_controls:
+            aatime, aadur, aanote = human_controls[0:3]
+            anti_anticipated_tokens = human_controls[3:]
+            anti_anticipated_time = aatime - ATIME_OFFSET
+        else:
+            # nothing to anti-anticipate
+            anti_anticipated_time = math.inf
+
+        while True:
+            while (current_time >= anticipated_time - chord_delta) or (current_time >= anti_anticipated_time - human_delta):
+                if (anticipated_time - chord_delta <= anti_anticipated_time - human_delta):
+                    # Add anticipated tokens
+                    tokens.extend([atime, adur, anote])
+
+                    if len(anticipated_tokens) > 0:
+                        atime, adur, anote = anticipated_tokens[0:3]
+                        anticipated_tokens = anticipated_tokens[3:]
+                        anticipated_time = atime - ATIME_OFFSET
+                    else:
+                        # nothing more to anticipate
+                        anticipated_time = math.inf
+                else:
+                    # Add anti-anticipated tokens
+                    tokens.extend([aatime, aadur, aanote])
+
+                    if len(anti_anticipated_tokens) > 0:
+                        aatime, aadur, aanote = anti_anticipated_tokens[0:3]
+                        anti_anticipated_tokens = anti_anticipated_tokens[3:]
+                        anti_anticipated_time = aatime - ATIME_OFFSET
+                    else:
+                        # nothing more to anti-anticipate
+                        anti_anticipated_time = math.inf
+
+            new_token = add_token_no_cache(
+                model, task, tokens, instruments, human_instruments, top_p, temperature,
+                max(start_time, current_time), masked_instrs, allowed_control_pn=None, debug=False,
+                force_z_cont=force_z_cont, save_input_ids_and_logits=save_input_ids_and_logits
+            )
+            new_time = new_token[0] - TIME_OFFSET
+            if new_time >= end_time:
+                break
+
+            tokens.extend(new_token)
+            dt = new_time - current_time
+            assert dt >= 0
+            current_time = new_time
+            progress.update(dt)
+        
+            if len(tokens) > 1024:
+                print(f"t = {current_time}, Inner loop: CONTEXT LENGTH REACHED")
+
+    new_events, controls = ops.split(tokens)
+    new_events = ops.sort(ops.unpad(new_events))
+
+    return new_events
+
+
+
+
+
+def generate(model, start_time, end_time, inputs=None, controls=None, top_p=1.0, debug=False, delta=DELTA*TIME_RESOLUTION):
+    if inputs is None:
+        inputs = []
+
+    if controls is None:
+        controls = []
+
+    start_time = int(TIME_RESOLUTION*start_time)
+    end_time = int(TIME_RESOLUTION*end_time)
+
+    # prompt is events up to start_time
+    prompt = ops.pad(ops.clip(inputs, 0, start_time, clip_duration=False, seconds=False), start_time)
+
+    # treat events beyond start_time as controls
+    future = ops.clip(inputs, start_time+1, ops.max_time(inputs, seconds=False), clip_duration=False, seconds=False)
+    if debug:
+        print('Future')
+        ops.print_tokens(future)
+
+    # clip controls that preceed the sequence
+    controls = ops.clip(controls, DELTA, ops.max_time(controls, seconds=False), clip_duration=False, seconds=False)
+
+    if debug:
+        print('Controls')
+        ops.print_tokens(controls)
+
+    z = [ANTICIPATE] if len(controls) > 0 or len(future) > 0 else [AUTOREGRESS]
+    if debug:
+        print('AR Mode' if z[0] == AUTOREGRESS else 'AAR Mode')
+
+    # interleave the controls with the events
+    tokens, controls = ops.anticipate(prompt, ops.sort(controls + [CONTROL_OFFSET+token for token in future]))
+
+    if debug:
+        print('Prompt')
+        ops.print_tokens(tokens)
+
+    current_time = ops.max_time(prompt, seconds=False)
+    if debug:
+        print('Current time:', current_time)
+
+    with tqdm(range(end_time-start_time)) as progress:
+        if controls:
+            atime, adur, anote = controls[0:3]
+            anticipated_tokens = controls[3:]
+            anticipated_time = atime - ATIME_OFFSET
+        else:
+            # nothing to anticipate
+            anticipated_time = math.inf
+
+        while True:
+            while current_time >= anticipated_time - delta:
+                tokens.extend([atime, adur, anote])
+                if debug:
+                    note = anote - ANOTE_OFFSET
+                    instr = note//2**7
+                    print('A', atime - ATIME_OFFSET, adur - ADUR_OFFSET, instr, note - (2**7)*instr)
+
+                if len(anticipated_tokens) > 0:
+                    atime, adur, anote = anticipated_tokens[0:3]
+                    anticipated_tokens = anticipated_tokens[3:]
+                    anticipated_time = atime - ATIME_OFFSET
+                else:
+                    # nothing more to anticipate
+                    anticipated_time = math.inf
+
+            new_token = add_token(model, z, tokens, top_p, max(start_time,current_time))
+            new_time = new_token[0] - TIME_OFFSET
+            if new_time >= end_time:
+                break
+
+            if debug:
+                new_note = new_token[2] - NOTE_OFFSET
+                new_instr = new_note//2**7
+                new_pitch = new_note - (2**7)*new_instr
+                print('C', new_time, new_token[1] - DUR_OFFSET, new_instr, new_pitch)
+
+            tokens.extend(new_token)
+            dt = new_time - current_time
+            assert dt >= 0
+            current_time = new_time
+            progress.update(dt)
+
+    events, _ = ops.split(tokens)
+    return ops.sort(ops.unpad(events) + future)
