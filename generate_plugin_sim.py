@@ -11,7 +11,7 @@ from anticipation.visuals import visualize # uses numpy < 2.0 which causes compa
 from anticipation.config import *
 from anticipation.vocab import *
 from anticipation.vocabs.tripletmidi import vocab
-from anticipation.sample import _generate_live_chunk
+from anticipation.sample import _generate_live_chunk, _generate_live_chunk_no_cache
 from anticipation.convert import make_events_safe
 from anticipation.sample import nucleus, debugchat_forward
 
@@ -80,7 +80,7 @@ from miditoolkit import MidiFile
 from copy import deepcopy
 chord_program_num = vocab['chord_instrument'] - vocab['instrument_offset']
 
-tmp_intermediate = None
+save_intermediate_midi_file = None
 
 def extract_human_and_chords(midifile_path, human_program_num=None, return_non_human_events=False, remove_drums=True, relativize_time=True):
     chord_program_num = vocab['chord_instrument'] - vocab['instrument_offset']
@@ -115,8 +115,8 @@ def extract_human_and_chords(midifile_path, human_program_num=None, return_non_h
     mf_chords = play_chords(mf_enchord) 
     mf_chords.instruments[0].program = chord_program_num
     mf.instruments = mf_chords.instruments # put back in original mf to preserve metadata
-    global tmp_intermediate
-    tmp_intermediate = mf
+    global save_intermediate_midi_file
+    save_intermediate_midi_file = mf
     mf.dump('tmp.mid')
     chord_events = compound_to_events(midi_to_compound_new('tmp.mid', vocab, debug=False)[0], vocab)
     _, chord_events = extract_instruments(chord_events, [chord_program_num])
@@ -204,7 +204,7 @@ agent_events = jitter(agent_events, 4, 3)
 clock_start = time.time()
 
 simulation_start_time = 8 # NOTE: in the plugin, this function is triggered a second before simulation_start_time!
-simulation_end_time = 60
+simulation_end_time = 21
 
 GENERATION_INTERVAL = 2
 
@@ -278,7 +278,7 @@ for st in range(simulation_start_time, simulation_end_time+1, GENERATION_INTERVA
         with open(f'generate_plugin_sim/inputs_as_parts/{start_time}_human_events_nb.txt', 'w') as f:
             f.write(str(human_events))
 
-        accompaniment = _generate_live_chunk(
+        accompaniment = _generate_live_chunk_no_cache(
             model_mlc if use_MLC else model, 
             inputs=inputs, 
             chord_controls=chord_controls, 
@@ -309,5 +309,6 @@ ops.print_tokens(inputs)
 with open(f'generate_plugin_sim/{simulation_start_time}_{simulation_end_time}_inputs.txt', 'w') as f:
     f.write(str(inputs))
 
-inputs_midi = events_to_midi(make_events_safe(inputs), vocab)
+# inputs_midi = events_to_midi(make_events_safe(inputs), vocab)
+inputs_midi = events_to_midi(inputs, vocab)
 inputs_midi.save('generate_plugin_sim/inputs.mid')
