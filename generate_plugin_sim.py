@@ -85,12 +85,12 @@ class DummyDebugInstrument:
         pass
 
 
-model_mlc = DebugChat(
-    model=LIVE_MLC,
-    debug_dir=Path("./debug-anticipation"),
-    model_lib=LIVE_MLC_LIB,
-    debug_instrument=DummyDebugInstrument(Path("./debug-anticipation")),
-)
+# model_mlc = DebugChat(
+#     model=LIVE_MLC,
+#     debug_dir=Path("./debug-anticipation"),
+#     model_lib=LIVE_MLC_LIB,
+#     debug_instrument=DummyDebugInstrument(Path("./debug-anticipation")),
+# )
 
 ### CHORDER DEPENDENCIES
 
@@ -268,6 +268,7 @@ GENERATION_INTERVAL = 2
 use_MLC = False
 use_file = False
 impose_sorting = True
+use_cache = True
 
 inputs = ops.clip(
     agent_events, 0, simulation_start_time, clip_duration=True, seconds=True
@@ -363,23 +364,43 @@ for st in range(simulation_start_time, simulation_end_time + 1, GENERATION_INTER
         ) as f:
             f.write(str(human_events))
 
-        accompaniment = _generate_live_chunk_no_cache(
-            model_mlc if use_MLC else model,
-            inputs=inputs,
-            chord_controls=chord_controls,
-            human_controls=human_controls,
-            start_time=start_time,
-            end_time=end_time,
-            instruments=instruments,
-            human_instruments=human_instruments,
-            temperature=1.0,
-            top_p=1.0,
-            masked_instrs=masked_instrs,
-            debug=False,
-            use_MLC=use_MLC,
-            force_z_cont=force_z_cont,
-            save_input_ids_and_logits=True,
-        )
+        if use_cache:
+
+            accompaniment = _generate_live_chunk(
+                model_mlc if use_MLC else model,
+                inputs=inputs,
+                chord_controls=chord_controls,
+                human_controls=human_controls,
+                start_time=start_time,
+                end_time=end_time,
+                instruments=instruments,
+                human_instruments=human_instruments,
+                temperature=1.0,
+                top_p=1.0,
+                masked_instrs=masked_instrs,
+                debug=False,
+                use_MLC=use_MLC,
+                force_z_cont=force_z_cont,
+                save_input_ids_and_logits=True,
+            )
+        else:
+            accompaniment = _generate_live_chunk_no_cache(
+                model_mlc if use_MLC else model,
+                inputs=inputs,
+                chord_controls=chord_controls,
+                human_controls=human_controls,
+                start_time=start_time,
+                end_time=end_time,
+                instruments=instruments,
+                human_instruments=human_instruments,
+                temperature=1.0,
+                top_p=1.0,
+                masked_instrs=masked_instrs,
+                debug=False,
+                use_MLC=use_MLC,
+                force_z_cont=force_z_cont,
+                save_input_ids_and_logits=True,
+            )
 
     # Recursive input: add accompaniment to inputs
     inputs = accompaniment
@@ -400,3 +421,33 @@ with open(
 # inputs_midi = events_to_midi(make_events_safe(inputs), vocab)
 inputs_midi = events_to_midi(inputs, vocab)
 inputs_midi.save("generate_plugin_sim/inputs.mid")
+
+# Post process prompts if cache is used
+if use_cache:
+    import glob
+    import ast
+    import tqdm
+
+    input_ids_files = sorted(glob.glob('generate_plugin_sim/input_ids_and_logits/input_ids_*_*.txt'), key=lambda x: (int(x.split('_')[-2]), int(x.split('_')[-1].split('.')[0])))
+
+    def process_input_file(file, current_prompt):
+        with open(file, 'r') as f:
+            tokens = ast.literal_eval(f.read())
+            
+            # If file has more than 1 token, it's a full prompt
+            if isinstance(tokens, list) and len(tokens) > 1:
+                current_prompt = tokens
+            else:
+                # Append single token to previous prompt
+                current_prompt = current_prompt + tokens
+            return current_prompt
+
+    # Process input files sequentially
+    tokens_list = []
+    current_prompt = ""
+    for file in tqdm(input_ids_files, desc="Processing input files"):
+        current_prompt = process_input_file(file, current_prompt)
+
+        output_path = os.path.join(os.path.dirname(file), "joined_" + os.path.basename(file))
+        with open(output_path, 'w') as f:
+            f.write(str(current_prompt))
