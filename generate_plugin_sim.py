@@ -61,9 +61,10 @@ INSTR_MED_BASELINE_AR_MLC_LIB = "/juice4/scr4/nlp/music/prelim-checkpoints/instr
 # LIVE_MLC_LIB = '/juice4/scr4/nlp/music/prelim-checkpoints/live-finetune-piano-aug-0604-med/1eaqb2uc/step-2000/mlc/mlc_cuda.so'
 
 # Local:
-LIVE = "/Users/npb/Desktop/anticipation/anticipation/mlc_music_models/models/live-finetune-piano-aug-0604-med/1eaqb2uc/step-2000/hf"
-LIVE_MLC = "/Users/npb/Desktop/anticipation/anticipation/mlc_music_models/models/live-finetune-piano-aug-0604-med/1eaqb2uc/step-2000/mlc"
-LIVE_MLC_LIB = "/Users/npb/Desktop/anticipation/anticipation/mlc_music_models/models/live-finetune-piano-aug-0604-med/1eaqb2uc/step-2000/mlc/q0f16-metal.so"
+# LIVE = "/Users/npb/Desktop/anticipation/anticipation/mlc_music_models/models/live-finetune-piano-aug-0604-med/1eaqb2uc/step-2000/hf"
+LIVE = "/Users/nic/Documents/anticipation/models/hf"
+# LIVE_MLC = "/Users/npb/Desktop/anticipation/anticipation/mlc_music_models/models/live-finetune-piano-aug-0604-med/1eaqb2uc/step-2000/mlc"
+# LIVE_MLC_LIB = "/Users/npb/Desktop/anticipation/anticipation/mlc_music_models/models/live-finetune-piano-aug-0604-med/1eaqb2uc/step-2000/mlc/q0f16-metal.so"
 
 # load an anticipatory music transformer
 if not torch.cuda.is_available():
@@ -173,7 +174,7 @@ def extract_human_and_chords(
 
 filename = "b0ea637882ee7911da70d75f0b726992.mid"
 human_instr = 0
-original = "/Users/npb/Downloads/All The Things You Are.mid"  # os.path.join("/Users/npb/Desktop/anticipation/lmd_full/b", filename)
+original = "songs/all_the_things_you_are-2_dm.mid"  # os.path.join("/Users/npb/Desktop/anticipation/lmd_full/b", filename)
 original_events = midi_to_events_new(original)
 # let's take out the drums
 original_events, _ = extract_instruments(original_events, [128])
@@ -365,7 +366,6 @@ for st in range(simulation_start_time, simulation_end_time + 1, GENERATION_INTER
             f.write(str(human_events))
 
         if use_cache:
-
             accompaniment = _generate_live_chunk(
                 model_mlc if use_MLC else model,
                 inputs=inputs,
@@ -424,16 +424,20 @@ inputs_midi.save("generate_plugin_sim/inputs.mid")
 
 # Post process prompts if cache is used
 if use_cache:
-    import glob
     import ast
+    import glob
+
     import tqdm
 
-    input_ids_files = sorted(glob.glob('generate_plugin_sim/input_ids_and_logits/input_ids_*_*.txt'), key=lambda x: (int(x.split('_')[-2]), int(x.split('_')[-1].split('.')[0])))
+    input_ids_files = sorted(
+        glob.glob("generate_plugin_sim/input_ids_and_logits/input_ids_*_*.txt"),
+        key=lambda x: (int(x.split("_")[-2]), int(x.split("_")[-1].split(".")[0])),
+    )
 
     def process_input_file(file, current_prompt):
-        with open(file, 'r') as f:
+        with open(file, "r") as f:
             tokens = ast.literal_eval(f.read())
-            
+
             # If file has more than 1 token, it's a full prompt
             if isinstance(tokens, list) and len(tokens) > 1:
                 current_prompt = tokens
@@ -445,9 +449,11 @@ if use_cache:
     # Process input files sequentially
     tokens_list = []
     current_prompt = ""
-    for file in tqdm(input_ids_files, desc="Processing input files"):
+    for file in tqdm.tqdm(input_ids_files, desc="Processing input files"):
         current_prompt = process_input_file(file, current_prompt)
 
-        output_path = os.path.join(os.path.dirname(file), "joined_" + os.path.basename(file))
-        with open(output_path, 'w') as f:
+        output_path = os.path.join(
+            os.path.dirname(file), "joined_" + os.path.basename(file)
+        )
+        with open(output_path, "w") as f:
             f.write(str(current_prompt))
